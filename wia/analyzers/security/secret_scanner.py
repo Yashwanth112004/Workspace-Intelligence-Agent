@@ -61,7 +61,7 @@ class SecretScanner:
             "rule_id": "SEC-005",
             "name": "Slack Webhook URL",
             "pattern": re.compile(
-                r"https://hooks\.slack\.com/services/T[a-zA-Z0-9_]+/B[a-zA-Z0-9_]+/[a-zA-Z0-9_]+"
+            r'''https://hooks\.slack\.com/services/(?:['"\s]*)T[a-zA-Z0-9_]+/B[a-zA-Z0-9_]+/[a-zA-Z0-9_]+''',
             ),
             "severity": "MEDIUM",
             "description": "Exposed Slack Incoming Webhook URL detected.",
