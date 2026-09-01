@@ -1,0 +1,1087 @@
+Metadata-Version: 2.4
+Name: wia
+Version: 0.1.0
+Summary: Workspace Intelligence Agent — Indexing and understanding software repositories
+Author: WIA Developer Team
+License: MIT
+Keywords: workspace,code intelligence,cli,indexer,developer-tools
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: Developers
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Classifier: Topic :: Software Development :: Libraries :: Python Modules
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: click>=8.1.0
+Requires-Dist: pathspec>=0.11.0
+Provides-Extra: dev
+Requires-Dist: pytest>=7.4.0; extra == "dev"
+
+# WIA — Workspace Intelligence Agent
+
+> **AI-powered workspace intelligence for analyzing, understanding, and reporting on large software codebases.**
+
+WIA (Workspace Intelligence Agent) is a **CLI-first software intelligence platform** designed to analyze large software repositories and build a structured **Workspace Knowledge Model**.
+
+Unlike traditional AI coding assistants that primarily respond to developer prompts, WIA focuses on **understanding the software workspace itself**.
+
+---
+
+# 🚀 What WIA Can Do (Full System Capabilities)
+
+WIA provides end-to-end repository intelligence across 13 core pillars:
+
+1. **Workspace Discovery & Incremental Change Tracking**: Recursively crawls workspaces, processes `.gitignore` rules, computes SHA-256 hashes, and tracks added, modified, or deleted files incrementally.
+2. **AST Symbol & Function Breakdown**: Extracts top-level and nested classes, functions, methods, parameters, docstrings, parent classes, and import statements across Python, JavaScript, TypeScript, Go, Rust, Java, and C/C++.
+3. **Dependency Conflict Detection**: Parses package manifests (`requirements.txt`, `package.json`) and flags version specification conflicts across ecosystems.
+4. **Git Intelligence & Churn Hotspots**: Analyzes commit history, author activity, file modification frequency, and flags high-churn risk files.
+5. **Security Secret Scanner**: Identifies hardcoded credentials, API keys, private tokens, and passwords with inner-secret masking to prevent credential leaks.
+6. **Semantic Vector Store & Similarity Search**: Splits source code into structural semantic chunks (`WorkspaceChunker`) and performs vector similarity search (`VectorStore`).
+7. **Workspace Knowledge Relationship Graph**: Models workspace relationship edges (`IMPORTS`, `DEFINES`, `CALLS`, `DEPENDS_ON`) in a persistent relationship graph (`WorkspaceGraph`).
+8. **Architecture Intelligence & Component Boundaries**: `wia architecture` maps system component boundaries, top-level modules, language distributions, and structural hotspots.
+9. **Symbol Refactoring Impact Analysis**: `wia impact <symbol>` evaluates downstream caller paths and calculates change risk levels (`LOW`, `MEDIUM`, `HIGH`).
+10. **Grounded AI Reasoning Agent**: `wia ask "<question>"` answers developer questions grounded in workspace index data using LLM reasoning and RAG context export.
+11. **Detailed Code & Function Explanation**: `wia explain <file_or_symbol>` generates file-specific explanations, listing every function, method, parameter list, docstring, parent class, and imported dependency.
+12. **Standalone HTML Report Dashboard**: `wia report` compiles analytics, AST symbols, dependencies, security findings, and git hotspots into a self-contained HTML report (`wia-report.html`).
+13. **System Environment Health Check**: `wia doctor` runs diagnostic checks verifying Python version, package installation, workspace directory write access, SQLite database connection, and Git CLI availability.
+
+---
+
+# 🛠️ WIA CLI Manual Testing & Verification Guide
+
+### 1. Install WIA Package (One-Time Setup)
+Navigate to the **WIA codebase directory** (where `pyproject.toml` is located) and run:
+
+```bash
+pip install -e .
+```
+
+---
+
+### 2. Implemented WIA Commands & Usage Examples
+
+```bash
+# System Diagnostics & Version Check
+wia --version
+wia doctor
+
+# Initialize workspace metadata (.wia directory)
+wia init [PATH]
+
+# Build/update complete workspace index & run multi-analyzer pipeline
+wia index [PATH] [--force-reindex]
+
+# Inspect workspace status & pending changes
+wia status [PATH]
+
+# List indexed workspace files (with optional language filter)
+wia files [PATH] [--language python]
+
+# View workspace summary analytics & framework metadata
+wia info [PATH]
+
+# Run specialized workspace analyzers (Dependencies, Git, Security)
+wia analyze deps [--workspace PATH]
+wia analyze git [--workspace PATH] [--max-commits 50] [--top-hotspots 10]
+wia analyze security [--workspace PATH]
+
+# Architecture Intelligence & Component Boundary Map
+wia architecture [--workspace PATH]
+
+# Symbol Change Impact Analysis & Risk Classification
+wia impact <symbol> [--workspace PATH]
+
+# Interactive AI Reasoning Agent Query
+wia ask "How does indexing work?" [--workspace PATH]
+
+# Explain Structure, Purpose, Architectural Role, Used-By, and Symbol Breakdown
+wia explain <file_or_symbol> [--workspace PATH]
+
+# Generate standalone HTML workspace report (wia-report.html)
+wia report [--workspace PATH] [--output wia-report.html]
+
+# Query indexed symbols, file paths, and languages with relevance scores
+wia search "main" [--workspace PATH] [--language Python] [--type function] [--limit 10]
+
+# Export Markdown architecture summary for LLM RAG context injection
+wia summary [--workspace PATH] [--output summary.md]
+```
+
+---
+
+### 3. Run Automated Test Suite
+```bash
+python -m pytest
+```
+*Current test suite status: 135 tests passing.*
+
+---
+
+# 📊 WIA Feature & Milestone Implementation Status
+
+| Feature / Module | Component File | Description | Status |
+|---|---|---|---|
+| **CLI & Packaging** | `pyproject.toml`, `wia/cli/app.py` | Command entrypoints & exception handling | ✅ Completed |
+| **Inspection Engine** | `wia/core/discovery.py`, `gitignore.py`, `filter.py` | Crawler, filtering, hashing, language & framework detection | ✅ Completed |
+| **State & Change Engine** | `wia/core/change_detector.py`, `metadata.py` | Incremental change tracking & metadata | ✅ Completed |
+| **Storage Engine** | `wia/storage/repository.py`, `sqlite_store.py` | JSON state & SQLite relational database storage | ✅ Completed |
+| **AST Symbol Parser** | `wia/analyzers/code/ast_parser.py` | Tree-sitter AST symbol & import extraction | ✅ Completed |
+| **Dependency Analyzer** | `wia/analyzers/dependency/` | Manifest parser (`requirements.txt`, `package.json`) & conflict detector | ✅ Completed |
+| **Git Intelligence** | `wia/analyzers/git/git_analyzer.py` | Commit history parser & file churn hotspot analyzer | ✅ Completed |
+| **Security Scanner** | `wia/analyzers/security/secret_scanner.py` | Hardcoded secret & credential scanner with inner masking | ✅ Completed |
+| **Semantic Chunker** | `wia/core/chunker.py` | Workspace-aware semantic code chunker | ✅ Completed |
+| **Vector Embeddings Store** | `wia/knowledge/vector_store.py`, `embeddings.py` | Persistent local vector store with similarity search | ✅ Completed |
+| **Knowledge Graph** | `wia/knowledge/graph.py` | Workspace relationship graph (`IMPORTS`, `DEFINES`, `CALLS`) | ✅ Completed |
+| **Architecture Engine** | `wia/core/architecture.py`, `wia architecture` | Component boundary & cycle discovery | ✅ Completed |
+| **Impact Analysis** | `wia/core/impact.py`, `wia impact <symbol>` | Refactoring risk classification (`LOW`, `MEDIUM`, `HIGH`) | ✅ Completed |
+| **LLM Reasoning Agent** | `wia/llm/`, `wia ask`, `wia explain` | Decoupled LLM provider, grounded Q&A & function breakdown | ✅ Completed |
+| **System Diagnostics** | `wia doctor` | System environment health diagnostic check | ✅ Completed |
+| **HTML Report Engine** | `wia/utils/report_generator.py` | Self-contained HTML dashboard generator (`wia-report.html`) | ✅ Completed |
+| **Search Engine** | `wia/core/search_engine.py`, `wia search` | Relevance-scored symbol & path query search | ✅ Completed |
+| **RAG Context Exporter** | `wia/core/rag_context.py`, `wia summary` | Markdown context generator for LLM injection | ✅ Completed |
+| **Integration Test Suite** | `tests/integration/test_full_pipeline.py` | End-to-end multi-language test suite | ✅ Completed |
+
+---
+
+# ⏳ Future Roadmap (Phase 3 IDE & Cloud Expansion)
+
+### 1. VS Code Extension & IDE Sidecar
+- **Goal**: VS Code extension displaying real-time WIA workspace intelligence and symbol impact directly in the editor.
+
+### 2. Live Web Dashboard & Multi-Repo Cloud Engine
+- **Goal**: Multi-repository cloud dashboard and real-time visualization interface.
+
+---
+
+# 🎯 Vision
+
+WIA aims to answer:
+
+> **"What is inside this software workspace, how does it work, what does it depend on, what problems exist, and what could be affected by future changes?"**
+
+WIA is therefore not just an AI coding chatbot.
+
+It is a **Workspace Intelligence Engine** with CLI, reporting, analysis, search, Q&A, and impact-analysis capabilities.
+
+---
+
+# ✨ Core Features
+
+## 🔍 Full Workspace Analysis
+
+WIA analyzes the repository across multiple dimensions:
+
+* Repository structure
+* Programming languages
+* Frameworks
+* Source files
+* Classes and functions
+* Symbols
+* Imports and exports
+* APIs and endpoints
+* Modules and services
+* Configuration files
+* Environment configuration
+* Build systems
+* Libraries
+* Dependencies
+* Dependency relationships
+* Git history
+* Security
+* Architecture
+* Data flow
+* Code relationships
+
+---
+
+## 📦 Library & Environment Intelligence
+
+WIA identifies the technologies already present in the workspace.
+
+It detects:
+
+* Installed libraries
+* Declared libraries
+* Missing libraries
+* Library versions
+* Direct dependencies
+* Transitive dependencies
+* Package managers
+* Runtime versions
+* Framework versions
+* Required development tools
+* Build dependencies
+
+Example:
+
+```text
+Environment Analysis
+
+✓ Python 3.12
+✓ Node.js 22
+✓ React
+✓ FastAPI
+✓ PostgreSQL
+
+Missing Dependencies
+⚠ numpy
+
+Version Conflicts
+⚠ requests
+
+package-A → requests >= 2.31
+package-B → requests < 2.30
+```
+
+---
+
+# ⚠️ Dependency & Library Conflict Detection
+
+WIA detects problems in the project's dependency ecosystem.
+
+It can identify:
+
+* Version conflicts
+* Incompatible dependencies
+* Missing packages
+* Duplicate dependencies
+* Dependency cycles
+* Unsupported runtime versions
+* Framework incompatibilities
+* Deprecated dependencies
+* Lockfile inconsistencies
+* Manifest/lockfile mismatches
+* Conflicting package requirements
+
+WIA reports:
+
+```text
+Problem
+   ↓
+Affected library
+   ↓
+Affected files/modules
+   ↓
+Reason
+   ↓
+Potential impact
+   ↓
+Suggested resolution
+```
+
+---
+
+# 🏗️ Architecture Intelligence
+
+WIA reconstructs the architecture from the actual codebase.
+
+It identifies relationships such as:
+
+```text
+Application
+    ↓
+Modules
+    ↓
+Services
+    ↓
+Controllers / APIs
+    ↓
+Business Logic
+    ↓
+Repositories
+    ↓
+Database / External Services
+```
+
+WIA can identify:
+
+* Modules
+* Services
+* APIs
+* Components
+* Data flow
+* Dependencies
+* Function relationships
+* Call relationships
+* Architectural boundaries
+* Potential architectural issues
+
+---
+
+# 📊 Batch-Based Analysis
+
+Large repositories should not be processed as one massive operation.
+
+WIA divides the workspace into manageable analysis batches.
+
+```text
+Repository
+     │
+     ▼
+Workspace Scanner
+     │
+     ▼
+Batch Planner
+     │
+     ├── Batch 001
+     ├── Batch 002
+     ├── Batch 003
+     ├── Batch 004
+     └── ...
+             │
+             ▼
+       Parallel Analysis
+             │
+             ▼
+      Workspace Knowledge
+             │
+             ▼
+       HTML Report
+```
+
+Each completed batch is persisted independently.
+
+This allows WIA to:
+
+* Process large repositories efficiently
+* Show results before the entire analysis finishes
+* Resume interrupted analysis
+* Avoid repeating completed work
+* Re-analyze only affected batches
+
+---
+
+# ⚡ Parallel Processing
+
+Independent analysis tasks run in parallel.
+
+```text
+                 Orchestrator
+                      │
+       ┌──────────────┼──────────────┐
+       ▼              ▼              ▼
+ Code Analysis   Dependency      Git Analysis
+       │          Analysis            │
+       └──────────────┬──────────────┘
+                      ▼
+                Security Analysis
+                      │
+                      ▼
+              Knowledge Engine
+```
+
+WIA uses local concurrency such as:
+
+* `asyncio`
+* `ProcessPoolExecutor`
+* Parallel workers
+
+The initial version is intentionally **local-first**.
+
+Future versions can introduce distributed workers.
+
+---
+
+# ♻️ Incremental Analysis
+
+WIA does not repeatedly analyze the entire repository.
+
+It maintains local state and detects changes using:
+
+* File hashing
+* Modification tracking
+* Dependency relationships
+* Incremental AST analysis
+* Persistent analysis results
+* Cached embeddings
+* Dependency-aware invalidation
+
+Example:
+
+```text
+Initial Analysis
+      ↓
+10,000 files analyzed
+      ↓
+Results cached
+      ↓
+Developer changes 20 files
+      ↓
+WIA detects changes
+      ↓
+Only affected batches are reprocessed
+```
+
+This is one of the core requirements for supporting large codebases.
+
+---
+
+# 📑 Persistent HTML Workspace Report
+
+WIA generates a **persistent HTML report/dashboard**.
+
+```text
+.wia/
+└── report/
+    ├── index.html
+    ├── batches/
+    │   ├── batch-001.json
+    │   ├── batch-002.json
+    │   ├── batch-003.json
+    │   └── ...
+    └── assets/
+```
+
+The report is updated as analysis progresses.
+
+### Example
+
+```text
+Batch 001     ✅ Complete
+Batch 002     ✅ Complete
+Batch 003     🔄 Processing
+Batch 004     ⏳ Pending
+Batch 005     ⏳ Pending
+```
+
+When the user reloads the HTML page:
+
+* Completed batches remain visible
+* Processing batches show their current state
+* Pending batches remain pending
+* Failed batches display errors
+* Newly completed batches become available
+* Previously completed batches are not regenerated
+
+The HTML report **never starts analysis itself**.
+
+It only reads the persisted WIA analysis state.
+
+---
+
+# 📋 Generated Reports
+
+WIA generates reports including:
+
+```text
+Workspace Overview
+Technology Stack
+Environment
+Code Structure
+Architecture
+Dependencies
+Dependency Conflicts
+Security
+Git Intelligence
+Project Health
+Batch Analysis
+```
+
+Example:
+
+```text
+.wia/report/
+
+├── index.html
+├── workspace.json
+├── architecture.json
+├── dependencies.json
+├── conflicts.json
+├── security.json
+├── environment.json
+└── batches/
+```
+
+---
+
+# 💬 Codebase Q&A
+
+Q&A is **one capability of WIA**, not the main purpose.
+
+Once the workspace has been analyzed, users can query the Workspace Knowledge Model.
+
+```bash
+wia ask "How does authentication work?"
+```
+
+```bash
+wia ask "What depends on PaymentService?"
+```
+
+```bash
+wia ask "Where is the database configured?"
+```
+
+```bash
+wia ask "What could break if I modify UserService?"
+```
+
+WIA retrieves relevant workspace information rather than repeatedly analyzing the entire repository.
+
+---
+
+# 🎯 Impact Analysis
+
+WIA can determine potential effects of modifying a component.
+
+```bash
+wia impact UserService
+```
+
+Example:
+
+```text
+UserService
+    │
+    ├── UserController
+    ├── AuthenticationService
+    ├── OrderService
+    ├── UserRepository
+    └── 14 dependent functions
+
+Impact Level: HIGH
+```
+
+Impact analysis combines:
+
+* Symbol relationships
+* Dependency relationships
+* Call relationships
+* Module relationships
+* Git history
+* Workspace knowledge
+
+---
+
+# 🧠 Workspace Knowledge Model
+
+WIA maintains a structured representation of the software workspace.
+
+```text
+Workspace
+│
+├── Files
+├── Symbols
+├── Modules
+├── Services
+├── APIs
+├── Dependencies
+├── Libraries
+├── Configuration
+├── Git History
+├── Security Findings
+└── Relationships
+```
+
+This model becomes the foundation for:
+
+* Reports
+* Search
+* Q&A
+* Impact analysis
+* Architecture analysis
+* Future VS Code integration
+
+---
+
+# 🏗️ Architecture
+
+```text
+                         WIA CLI
+                            │
+                            ▼
+                   ┌────────────────┐
+                   │  Orchestrator  │
+                   │ Batch Scheduler│
+                   └───────┬────────┘
+                           │
+                    Workspace Scanner
+                           │
+                           ▼
+                     Batch Planner
+                           │
+          ┌────────────────┼────────────────┐
+          │                │                │
+          ▼                ▼                ▼
+    Code Intelligence  Dependency      Git Intelligence
+        Worker          Worker             Worker
+          │                │                │
+          └────────────────┼────────────────┘
+                           │
+                    Security Worker
+                           │
+                           ▼
+              Workspace Knowledge Engine
+              ┌────────────┼────────────┐
+              │            │            │
+            SQLite       FAISS        Cache
+              │            │            │
+              └────────────┼────────────┘
+                           │
+                           ▼
+                 Architecture Agent
+                           │
+                           ▼
+                    RAG Context
+                           │
+                           ▼
+                    Reasoning Agent
+                           │
+              ┌────────────┴────────────┐
+              ▼                         ▼
+        Report Generator           Q&A / Search
+              │                         │
+              ▼                         ▼
+       HTML Workspace Report       CLI Response
+```
+
+---
+
+# 🤖 WIA Agents & Workers
+
+WIA uses specialized analysis workers and AI agents.
+
+### 1. Scanner Worker
+
+Responsible for:
+
+* Repository scanning
+* File discovery
+* `.gitignore`
+* File hashing
+* Language detection
+* Framework detection
+* Batch creation
+
+### 2. Code Intelligence Worker
+
+Responsible for:
+
+* Tree-sitter AST analysis
+* Symbols
+* Classes
+* Functions
+* Imports
+* Exports
+* Code relationships
+* LSP/SCIP integration
+
+### 3. Dependency Worker
+
+Responsible for:
+
+* Package manifests
+* Lockfiles
+* Libraries
+* Versions
+* Dependency graphs
+* Missing dependencies
+* Dependency conflicts
+
+### 4. Git Intelligence Worker
+
+Responsible for:
+
+* Commits
+* Branches
+* Authors
+* File history
+* Change frequency
+* Hotspots
+
+### 5. Security Worker
+
+Responsible for:
+
+* Static analysis
+* Secret detection
+* Vulnerability patterns
+* Security findings
+* Risk classification
+
+### 6. Architecture Agent
+
+Responsible for:
+
+* Architecture interpretation
+* Module relationships
+* Service relationships
+* APIs
+* Data flow
+* Architecture summaries
+
+### 7. Knowledge/RAG Engine
+
+Responsible for:
+
+* Indexing
+* Embeddings
+* Semantic retrieval
+* Context construction
+* Workspace knowledge
+
+### 8. Reasoning Agent
+
+Responsible for:
+
+* Complex reasoning
+* Impact analysis
+* Codebase Q&A
+* Architecture reasoning
+* Recommendations
+
+Deterministic analysis is performed by workers wherever possible. LLM agents are used primarily for tasks that require reasoning.
+
+---
+
+# 🖥️ CLI
+
+WIA is **CLI-first**.
+
+## Initialize
+
+```bash
+wia init
+```
+
+## Analyze
+
+```bash
+wia analyze
+```
+
+## Check status
+
+```bash
+wia status
+```
+
+## Open HTML report
+
+```bash
+wia report
+```
+
+or:
+
+```bash
+wia report --open
+```
+
+## Search
+
+```bash
+wia search "authentication"
+```
+
+## Ask
+
+```bash
+wia ask "How does authentication work?"
+```
+
+## Architecture
+
+```bash
+wia architecture
+```
+
+## Dependencies
+
+```bash
+wia dependencies
+```
+
+## Security
+
+```bash
+wia security
+```
+
+## Git intelligence
+
+```bash
+wia git
+```
+
+## Explain
+
+```bash
+wia explain src/services/UserService.py
+```
+
+## Impact analysis
+
+```bash
+wia impact UserService
+```
+
+---
+
+# ⚙️ Technology Stack
+
+## Core
+
+* Python 3.12+
+* Typer
+* Rich
+* Pydantic
+* asyncio
+* ProcessPoolExecutor
+* uv
+
+## Code Intelligence
+
+* Tree-sitter
+* LSP
+* SCIP
+
+## Security
+
+* Semgrep
+
+## Knowledge & Storage
+
+* SQLite
+* FAISS
+* Local filesystem cache
+* In-memory relationship graph
+
+## AI
+
+* LLM abstraction layer
+* RAG
+* Embeddings
+* Architecture reasoning
+* Report generation
+
+## Version Control
+
+* Git
+* GitPython / native Git
+
+---
+
+# 🚀 Future Technology
+
+The first version is deliberately **local and lightweight**.
+
+Future WIA versions can introduce:
+
+```text
+PostgreSQL
+pgvector / Qdrant
+Neo4j
+Redis
+Apache Kafka
+Distributed Workers
+NVIDIA NIM
+GPU acceleration
+Kubernetes
+VS Code Extension
+Web Dashboard
+```
+
+These technologies are not required for the initial CLI MVP.
+
+---
+
+# ⚡ Performance Strategy
+
+WIA is designed around five principles:
+
+```text
+INCREMENTAL
+    +
+PARALLEL
+    +
+BATCHED
+    +
+CACHED
+    +
+SELECTIVE AI
+```
+
+WIA should **never send an entire large repository to an LLM**.
+
+Instead:
+
+```text
+Repository
+     ↓
+Scan
+     ↓
+Hash
+     ↓
+Batch
+     ↓
+Parallel Analysis
+     ↓
+Persist Results
+     ↓
+Retrieve Relevant Information
+     ↓
+AI Reasoning Only When Required
+```
+
+This reduces:
+
+* Processing time
+* Memory usage
+* LLM token usage
+* Repeated computation
+* Analysis cost
+
+---
+
+# 📁 Project Structure
+
+A proposed implementation structure:
+
+```text
+wia/
+│
+├── cli/
+│   ├── commands/
+│   └── main.py
+│
+├── core/
+│   ├── orchestrator.py
+│   ├── scheduler.py
+│   ├── batch.py
+│   └── models.py
+│
+├── scanner/
+│   ├── scanner.py
+│   ├── hasher.py
+│   └── detector.py
+│
+├── analyzers/
+│   ├── code/
+│   ├── dependency/
+│   ├── git/
+│   └── security/
+│
+├── knowledge/
+│   ├── database.py
+│   ├── vector_store.py
+│   ├── graph.py
+│   └── cache.py
+│
+├── agents/
+│   ├── architecture.py
+│   └── reasoning.py
+│
+├── rag/
+│   ├── retriever.py
+│   ├── embeddings.py
+│   └── context.py
+│
+├── reports/
+│   ├── generator.py
+│   ├── templates/
+│   └── assets/
+│
+└── tests/
+```
+
+---
+
+# 🔄 Analysis Lifecycle
+
+```text
+wia analyze
+     │
+     ▼
+Scan Workspace
+     │
+     ▼
+Detect Changes
+     │
+     ▼
+Create Batches
+     │
+     ▼
+Run Workers in Parallel
+     │
+     ▼
+Persist Batch Results
+     │
+     ▼
+Update Workspace Knowledge
+     │
+     ▼
+Update HTML Report
+     │
+     ▼
+Continue Remaining Batches
+     │
+     ▼
+Final Workspace Report
+```
+
+If analysis is interrupted:
+
+```text
+Completed Batches → Keep
+Running Batch     → Re-evaluate
+Pending Batches   → Resume
+Unchanged Files   → Skip
+```
+
+---
+
+# 🔐 Local-First Design
+
+The initial WIA CLI is designed to work locally wherever possible.
+
+Benefits:
+
+* Faster analysis
+* Reduced network dependency
+* Persistent local knowledge
+* Better privacy
+* Lower recurring cost
+* Suitable for large repositories
+
+AI providers can be configured independently through the WIA model abstraction.
+
+---
+
+# 🎯 Project Goal
+
+The initial goal of WIA is to create a **fast, intelligent, batch-based CLI capable of analyzing large software repositories and generating a continuously updated HTML workspace report**.
+
+The first release should successfully provide:
+
+```bash
+wia init
+wia analyze
+wia status
+wia report
+wia search
+wia ask
+wia architecture
+wia dependencies
+wia security
+wia impact
+```
+
+The CLI is the foundation for the future WIA ecosystem:
+
+```text
+                 WIA Intelligence Engine
+                         │
+          ┌──────────────┼──────────────┐
+          ▼              ▼              ▼
+         CLI          VS Code       Web Dashboard
+                         │
+                         ▼
+                 Developer Workflow
+```
+
+> **WIA doesn't just answer questions about your codebase.
+> WIA analyzes your workspace, builds its intelligence, generates reports, detects problems, and lets you reason over the system.**
