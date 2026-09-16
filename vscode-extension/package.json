@@ -1,0 +1,98 @@
+{
+  "name": "wia-vscode",
+  "displayName": "Workspace Intelligence Agent (WIA)",
+  "description": "AI-Powered Code Intelligence, Architecture Map, and AST Symbol Explorer for VS Code",
+  "version": "0.3.0",
+  "publisher": "wia-agent",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Other",
+    "Machine Learning"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "wia-container",
+          "title": "Workspace Intelligence Agent",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "wia-container": [
+        {
+          "id": "wia-architecture",
+          "name": "🏛️ Architecture & Subsystems"
+        },
+        {
+          "id": "wia-symbols",
+          "name": "🔍 AST Symbol Explorer"
+        },
+        {
+          "id": "wia-dependencies",
+          "name": "📦 Dependencies & Imports"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "wia.scanWorkspace",
+        "title": "WIA: Scan & Ingest Workspace"
+      },
+      {
+        "command": "wia.openChat",
+        "title": "WIA: Open AI Chat Assistant"
+      },
+      {
+        "command": "wia.explainArchitecture",
+        "title": "WIA: Explain Code Architecture"
+      },
+      {
+        "command": "wia.traceFlow",
+        "title": "WIA: Trace Code Execution Flow"
+      },
+      {
+        "command": "wia.analyzeImpact",
+        "title": "WIA: Analyze Change Impact"
+      },
+      {
+        "command": "wia.exportOkf",
+        "title": "WIA: Export Open Knowledge Format (.wia/knowledge/)"
+      },
+      {
+        "command": "wia.startDaemon",
+        "title": "WIA: Start Local Intelligence Daemon"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "wia.explainArchitecture",
+          "group": "wia@1"
+        },
+        {
+          "command": "wia.traceFlow",
+          "group": "wia@2"
+        },
+        {
+          "command": "wia.analyzeImpact",
+          "group": "wia@3"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.80.0",
+    "typescript": "^5.3.0"
+  }
+}
