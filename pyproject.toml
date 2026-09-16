@@ -1,0 +1,36 @@
+[project]
+name = "workspace-intelligence-agent"
+version = "0.3.0"
+description = "AI-powered workspace intelligence agent for AST code understanding, hierarchical summarization, and RAG Q&A"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.100.0",
+    "uvicorn>=0.23.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "sqlmodel>=0.0.16",
+    "sqlalchemy>=2.0.0",
+    "psycopg2-binary>=2.9.0",
+    "GitPython>=3.1.0",
+    "tree-sitter>=0.21.0",
+    "sentence-transformers>=2.2.0",
+    "numpy>=1.24.0",
+    "httpx>=0.24.0",
+    "python-multipart>=0.0.6",
+    "google-genai>=0.1.0",
+    "openai>=1.0.0",
+    "anthropic>=0.18.0",
+    "pytest>=8.0.0",
+    "rich>=13.0.0",
+    "typer>=0.9.0"
+]
+
+[project.scripts]
+wia = "app.cli:cli_entry"
+
+[tool.pytest.ini_options]
+pythonpath = ["backend"]
+testpaths = ["backend/tests"]
+python_files = ["test_*.py"]
+
