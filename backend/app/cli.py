@@ -50,36 +50,54 @@ def cmd_scan(args):
     print(f"\n🚀 [WIA CLI] Ingesting repository: {source_path}")
     
     with get_db_session() as session:
-        repo = Repository(
-            name=name,
-            source_type="github" if source_path.startswith("http") else "local",
-            source_path=source_path,
-            local_path="",
-            status="pending",
-            progress_pct=0,
-            status_message="Ingestion initialized from CLI"
-        )
-        session.add(repo)
+        existing = get_repo(session, name) or get_repo(session, source_path)
+        if existing:
+            repo = existing
+            repo.source_path = source_path
+            repo.status = "pending"
+            repo.status_message = "Reindexing repository from CLI"
+            # Remove previous symbols and nodes for accurate incremental update
+            for s in session.exec(select(ASTSymbol).where(ASTSymbol.repo_id == repo.id)).all():
+                session.delete(s)
+            for n in session.exec(select(FileNode).where(FileNode.repo_id == repo.id)).all():
+                session.delete(n)
+            for sm in session.exec(select(WorkspaceSummary).where(WorkspaceSummary.repo_id == repo.id)).all():
+                session.delete(sm)
+        else:
+            repo = Repository(
+                name=name,
+                source_type="github" if source_path.startswith("http") else "local",
+                source_path=source_path,
+                local_path="",
+                status="pending",
+                progress_pct=0,
+                status_message="Ingestion initialized from CLI"
+            )
+            session.add(repo)
         session.commit()
         session.refresh(repo)
+        repo_id = repo.id
 
-        print(f"📦 Repository ID: {repo.id}")
-        print("⏳ Running ingestion, knowledge graph build & intelligence pipeline...\n")
-        
-        try:
-            run_ingestion_pipeline(repo.id, source_path)
-            session.refresh(repo)
+
+    print(f"📦 Repository ID: {repo_id}")
+    print("⏳ Running ingestion, knowledge graph build & intelligence pipeline...\n")
+    
+    try:
+        run_ingestion_pipeline(repo_id, source_path)
+        with get_db_session() as session:
+            repo = session.get(Repository, repo_id)
             print("✅ Ingestion & Analysis Completed Successfully!")
-            print(f"   - Name:         {repo.name}")
-            print(f"   - Total Files:  {repo.total_files}")
-            print(f"   - Total LOC:    {repo.total_loc}")
-            print(f"   - Tech Stack:   {repo.tech_stack}")
-            print(f"   - Entry Points: {repo.entry_points}")
-            print(f"   - Dependencies: {len(repo.dependencies or [])} detected\n")
-            print(f"💡 Query with: wia query \"{repo.name}\" \"Explain architecture\"\n")
-        except Exception as e:
-            print(f"❌ Ingestion failed: {e}")
-            sys.exit(1)
+            print(f"   - Name:         {repo.name if repo else name}")
+            print(f"   - Total Files:  {repo.total_files if repo else 0}")
+            print(f"   - Total LOC:    {repo.total_loc if repo else 0}")
+            print(f"   - Tech Stack:   {repo.tech_stack if repo else {}}")
+            print(f"   - Entry Points: {repo.entry_points if repo else []}")
+            print(f"   - Dependencies: {len(repo.dependencies or []) if repo else 0} detected\n")
+            print(f"💡 Query with: wia query \"{repo.name if repo else name}\" \"Explain architecture\"\n")
+    except Exception as e:
+        print(f"❌ Ingestion failed: {e}")
+        sys.exit(1)
+
 
 def cmd_query(args):
     """Ask technical questions about a codebase."""

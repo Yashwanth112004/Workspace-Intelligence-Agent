@@ -318,3 +318,10 @@ class CodeKnowledgeGraph:
             "nodes": nodes,
             "edges": edges
         }
+
+    def to_dict(self) -> Dict[str, Any]:
+        return self.get_architecture_graph()
+
+    def to_json(self) -> Dict[str, Any]:
+        return self.get_architecture_graph()
+

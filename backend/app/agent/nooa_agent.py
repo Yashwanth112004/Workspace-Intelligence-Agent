@@ -75,13 +75,15 @@ class WIACodeUnderstandingAgent:
         )
 
         # 4. Context Building
+        has_evidence = bool(retrieval.get("chunks") or retrieval.get("symbols") or retrieval.get("summaries"))
         context_str = ContextBuilder.build_structured_context(self.repo, retrieval)
         sanitized_context = SecretSafetyService.sanitize_content(context_str)
 
         system_prompt = """You are the WIA Code Understanding Agent, a Lead AI Software Architect.
 Your role is to explain code architecture, component relationships, trace data flow, and answer technical questions.
 Always ground your answers in the provided authoritative source facts, knowledge graph relations, and code chunks.
-Always reference specific file paths, symbols, and line numbers."""
+Always reference specific file paths, symbols, and line numbers.
+If the requested feature, component, or question cannot be answered from the provided context, state clearly that no evidence was found in the codebase rather than inventing details."""
 
         user_prompt = f"""[STRUCTURED CODEBASE CONTEXT]
 {sanitized_context}
@@ -89,9 +91,16 @@ Always reference specific file paths, symbols, and line numbers."""
 [USER QUESTION]
 {user_query}
 
-Provide a structured, authoritative technical response grounded in the codebase context above."""
+Provide a structured, authoritative technical response grounded strictly in the codebase context above."""
 
-        response_text = LLMClient.generate_completion(user_prompt, system_prompt=system_prompt)
+        if LLMClient.is_nim_available():
+            response_text = LLMClient.generate_completion(user_prompt, system_prompt=system_prompt)
+        elif not has_evidence or (not retrieval.get("chunks") and not retrieval.get("symbols")):
+            response_text = f"No relevant implementation, symbol, or evidence for '{user_query}' was found in the indexed workspace knowledge base for '{self.repo.name}'."
+        else:
+            # Deterministic synthesis from retrieved evidence
+            chunks_summary = "\n".join([f"- `{c.file_path}` (lines {c.start_line}-{c.end_line}): {c.content[:180]}..." for c in retrieval.get("chunks", [])[:3]])
+            response_text = f"### Grounded Codebase Evidence for `{self.repo.name}`\n\nBased on indexed AST symbols and source chunks:\n\n{chunks_summary}\n\n*Note: Configure `NVIDIA_NIM_API_KEY` to enable advanced multi-step LLM reasoning.*"
 
         return {
             "query": user_query,
@@ -101,6 +110,7 @@ Provide a structured, authoritative technical response grounded in the codebase 
             "repo_id": self.repo.id,
             "repo_name": self.repo.name
         }
+
 
     def trace_flow(self, entry_symbol: str) -> Dict[str, Any]:
         """Traces execution call flow starting from an entry point."""

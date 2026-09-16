@@ -38,3 +38,15 @@ class ASTParserEngine:
             return c_family_parser.parse(repo_id, relative_path, code_content, language)
 
         return []
+
+    @classmethod
+    def parse_file_symbols(cls, code_content: str, ext: str, relative_path: str = "") -> List[ASTSymbol]:
+        """Helper to parse a single file's symbols by file extension."""
+        lang_map = {
+            ".py": "Python", ".js": "JavaScript", ".jsx": "JavaScript",
+            ".ts": "TypeScript", ".tsx": "TypeScript", ".go": "Go",
+            ".rs": "Rust", ".java": "Java", ".c": "C", ".cpp": "C++",
+            ".h": "C/C++ Header", ".hpp": "C++ Header", ".cs": "C#"
+        }
+        lang = lang_map.get(ext.lower(), "Python")
+        return cls.parse_file("standalone_file", relative_path, code_content, lang)

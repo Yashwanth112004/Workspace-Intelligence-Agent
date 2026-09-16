@@ -27,8 +27,9 @@ def get_engine():
 engine = get_engine()
 
 def init_db():
-    from app.models import workspace # Ensure models are imported
+    from app.models import workspace, knowledge # Ensure all SQLModel models are registered
     SQLModel.metadata.create_all(engine)
+
 
 def get_session():
     with Session(engine) as session:

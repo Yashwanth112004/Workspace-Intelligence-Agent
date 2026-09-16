@@ -19,9 +19,13 @@ class NvidiaNIMProvider(LLMProvider):
         base_url: Optional[str] = None,
         model: Optional[str] = None
     ):
-        self.api_key = api_key or settings.NVIDIA_NIM_API_KEY or settings.NVIDIA_API_KEY
+        if api_key is not None:
+            self.api_key = api_key
+        else:
+            self.api_key = settings.NVIDIA_NIM_API_KEY or settings.NVIDIA_API_KEY
         self.base_url = base_url or settings.NVIDIA_NIM_BASE_URL or "https://integrate.api.nvidia.com/v1"
-        self.model = model or settings.NVIDIA_NIM_MODEL or "meta/llama-3.1-70b-instruct"
+        self.model = model or settings.NVIDIA_NIM_MODEL or "meta/llama-3.3-70b-instruct"
+
 
     def is_available(self) -> bool:
         return bool(self.api_key and self.api_key.strip())

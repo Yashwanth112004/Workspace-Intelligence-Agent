@@ -1,6 +1,6 @@
 import os
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from sqlmodel import Session, select
 from app.core.database import engine
 from app.core.config import settings
@@ -16,13 +16,17 @@ logger = logging.getLogger("wia.pipeline")
 IN_MEMORY_CHUNKS: Dict[str, List[VectorChunk]] = {}
 IN_MEMORY_SUMMARIES: Dict[str, List[WorkspaceSummary]] = {}
 
-def run_ingestion_pipeline(repo_id: str):
+def run_ingestion_pipeline(repo_id: str, custom_path: Optional[str] = None):
     """Full background ingestion and understanding pipeline."""
     with Session(engine) as session:
         repo = session.get(Repository, repo_id)
         if not repo:
             logger.error(f"Repository {repo_id} not found for pipeline processing.")
             return
+
+        if custom_path and not repo.source_path:
+            repo.source_path = custom_path
+
 
         try:
             # 1. Repository Ingestion & Crawling
