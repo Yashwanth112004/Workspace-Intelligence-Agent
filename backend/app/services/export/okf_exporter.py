@@ -1,6 +1,6 @@
 import os
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from app.models.workspace import Repository, FileNode, ASTSymbol, WorkspaceSummary
 from app.services.graph.code_graph import CodeKnowledgeGraph
 
@@ -11,6 +11,33 @@ class OKFExporter:
     Exports codebase intelligence in Open Knowledge Format (OKF).
     Writes a human-readable, Git-friendly `.wia/knowledge/` documentation tree.
     """
+
+    @staticmethod
+    def export_repository_knowledge(
+        repo: Repository,
+        files: List[FileNode],
+        symbols: List[ASTSymbol],
+        summaries: List[WorkspaceSummary],
+        graph: Optional[CodeKnowledgeGraph] = None,
+        output_dir: str = ""
+    ) -> Dict[str, Any]:
+        """Exports OKF knowledge package and returns manifest metadata."""
+        out = output_dir or os.path.join(repo.source_path or ".", ".wia", "knowledge")
+        knowledge_dir = OKFExporter.export_okf_tree(
+            repo=repo,
+            nodes=files,
+            symbols=symbols,
+            summaries=summaries,
+            output_dir=os.path.dirname(os.path.dirname(out)) if out.endswith(".wia/knowledge") or out.endswith(".wia\\knowledge") else out
+        )
+        return {
+            "schema_version": "okf/v1.0",
+            "repo_id": repo.id,
+            "repo_name": repo.name,
+            "knowledge_dir": knowledge_dir,
+            "entities_count": len(files) + len(symbols),
+            "relations_count": len(symbols) * 2
+        }
 
     @staticmethod
     def export_okf_tree(

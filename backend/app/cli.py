@@ -1,8 +1,9 @@
 import os
 import sys
+import time
 import argparse
 import logging
-from typing import Optional
+from typing import Optional, List, Dict
 from sqlmodel import Session, select
 
 # Ensure UTF-8 output on Windows consoles
@@ -24,6 +25,7 @@ from app.services.pipeline import run_ingestion_pipeline, IN_MEMORY_CHUNKS, IN_M
 from app.services.graph.code_graph import CodeKnowledgeGraph
 from app.services.export.okf_exporter import OKFExporter
 from app.services.intelligence.incremental_indexer import IncrementalIndexer
+from app.services.intelligence.git_intel import GitIntelligence
 
 logging.basicConfig(level=logging.WARNING, format="%(message)s")
 logger = logging.getLogger("wia.cli")
@@ -61,63 +63,78 @@ def cmd_scan(args):
         session.commit()
         session.refresh(repo)
 
-        repo_id = repo.id
-        print(f"📦 Repository ID: {repo_id}")
-        print(f"⏳ Running ingestion, knowledge graph build & intelligence pipeline...")
-
-        run_ingestion_pipeline(repo_id)
-
-        session.refresh(repo)
-        if repo.status == "completed":
-            print(f"\n✅ Ingestion & Analysis Completed Successfully!")
+        print(f"📦 Repository ID: {repo.id}")
+        print("⏳ Running ingestion, knowledge graph build & intelligence pipeline...\n")
+        
+        try:
+            run_ingestion_pipeline(repo.id, source_path)
+            session.refresh(repo)
+            print("✅ Ingestion & Analysis Completed Successfully!")
             print(f"   - Name:         {repo.name}")
             print(f"   - Total Files:  {repo.total_files}")
             print(f"   - Total LOC:    {repo.total_loc}")
-            print(f"   - Tech Stack:   {dict(repo.tech_stack or {})}")
-            print(f"   - Entry Points: {repo.entry_points or []}")
-            print(f"   - Dependencies: {len(repo.dependencies or [])} detected")
-            print(f"\n💡 Query with: wia query \"{repo.name}\" \"Explain architecture\"\n")
-        else:
-            print(f"\n❌ Pipeline failed: {repo.error_message}")
+            print(f"   - Tech Stack:   {repo.tech_stack}")
+            print(f"   - Entry Points: {repo.entry_points}")
+            print(f"   - Dependencies: {len(repo.dependencies or [])} detected\n")
+            print(f"💡 Query with: wia query \"{repo.name}\" \"Explain architecture\"\n")
+        except Exception as e:
+            print(f"❌ Ingestion failed: {e}")
+            sys.exit(1)
 
 def cmd_query(args):
-    """Query codebase via NOOA Agent & Hybrid RAG from CLI."""
+    """Ask technical questions about a codebase."""
     target = args.target.strip()
     question = args.question.strip()
 
     with get_db_session() as session:
         repo = get_repo(session, target)
         if not repo:
-            print(f"❌ Error: Repository '{target}' not found. Ingest it first with 'scan' or check 'list'.")
+            print(f"❌ Repository '{target}' not found. Run 'wia list' to see available repositories.")
             return
 
-        chunks = session.exec(select(VectorChunk).where(VectorChunk.repo_id == repo.id)).all()
-        summaries = session.exec(select(WorkspaceSummary).where(WorkspaceSummary.repo_id == repo.id)).all()
+        chunks = IN_MEMORY_CHUNKS.get(repo.id, [])
+        summaries = IN_MEMORY_SUMMARIES.get(repo.id, [])
+        if not summaries:
+            summaries = session.exec(select(WorkspaceSummary).where(WorkspaceSummary.repo_id == repo.id)).all()
+
         symbols = session.exec(select(ASTSymbol).where(ASTSymbol.repo_id == repo.id)).all()
         nodes = session.exec(select(FileNode).where(FileNode.repo_id == repo.id)).all()
-
         graph = CodeKnowledgeGraph(repo.id, session=session)
         graph.build_from_ast_and_files(nodes, symbols)
 
-        print(f"\n🧠 [WIA Agent] Querying '{repo.name}': \"{question}\"")
-        agent = WIACodeUnderstandingAgent(repo, chunks, summaries, symbols=symbols, graph=graph)
-        result = agent.answer_question(question)
+        agent = WIACodeUnderstandingAgent(
+            repo=repo,
+            chunks=chunks,
+            summaries=summaries,
+            symbols=symbols,
+            graph=graph
+        )
 
-        print("\n" + "=" * 65)
-        print("🤖 ANSWER:")
-        print("=" * 65)
-        print(result.get("response", "No response generated."))
-        if result.get("citations"):
-            print("\n" + "=" * 65)
-            print("📑 CONTEXT CITATIONS:")
-            print("=" * 65)
-            for idx, cite in enumerate(result.get("citations", []), 1):
-                lines = f" (Lines {cite['start_line']}-{cite['end_line']})" if cite.get("start_line") else ""
-                print(f" {idx}. [{cite.get('chunk_type', 'code').upper()}] {cite.get('file_path')}{lines} (Score: {cite.get('score', 0)})")
-        print("=" * 65 + "\n")
+        print(f"\n🧠 [WIA Code Understanding Agent] Processing query for '{repo.name}'...")
+        print(f"❓ Question: {question}\n")
+        
+        try:
+            result = agent.answer_question(question)
+            print("=" * 70)
+            print(result.get("response", "No response generated."))
+            print("=" * 70)
+
+            citations = result.get("citations", [])
+            if citations:
+                print("\n📌 Exact Source Citations & Provenance:")
+                for idx, c in enumerate(citations[:6], 1):
+                    file_p = c.get("file_path", "unknown")
+                    s_line = c.get("start_line", 1)
+                    e_line = c.get("end_line", 1)
+                    c_type = c.get("chunk_type", "reference")
+                    score = c.get("score", 0.0)
+                    print(f"   [{idx}] {file_p} (lines {s_line}-{e_line}) [{c_type}] - relevance: {score:.2f}")
+            print()
+        except Exception as e:
+            print(f"\n❌ Error: {e}\n")
 
 def cmd_architecture(args):
-    """View architecture breakdown and knowledge graph stats."""
+    """View architecture overview, subsystems, and knowledge graph."""
     target = args.target.strip()
     with get_db_session() as session:
         repo = get_repo(session, target)
@@ -126,29 +143,33 @@ def cmd_architecture(args):
             return
 
         summaries = session.exec(select(WorkspaceSummary).where(WorkspaceSummary.repo_id == repo.id)).all()
+        repo_summary = next((s.summary_text for s in summaries if s.level == "repository"), "Architecture summary available.")
+        folder_summaries = [s for s in summaries if s.level in ("parent_folder", "child_folder")]
+
         nodes = session.exec(select(FileNode).where(FileNode.repo_id == repo.id)).all()
         symbols = session.exec(select(ASTSymbol).where(ASTSymbol.repo_id == repo.id)).all()
-
         graph = CodeKnowledgeGraph(repo.id, session=session)
         graph.build_from_ast_and_files(nodes, symbols)
-        arch = graph.get_architecture_graph()
-
-        repo_sum = next((s.summary_text for s in summaries if s.level == "repository"), "Architecture summary available.")
-        folder_sums = [s for s in summaries if s.level in ("parent_folder", "child_folder")]
+        graph_data = graph.to_json()
 
         print(f"\n🏛️ Architecture Overview for '{repo.name}':")
-        print(f"   - Nodes in Graph: {arch['total_nodes']} (Files & Classes)")
-        print(f"   - Edges in Graph: {arch['total_edges']} (Contains, Calls, Defines, Imports)")
-        print(f"\n📖 High-Level Summary:\n{repo_sum}\n")
+        print(f"   - Nodes in Graph: {len(graph_data['nodes'])} (Files & Classes)")
+        print(f"   - Edges in Graph: {len(graph_data['edges'])} (Contains, Calls, Defines, Imports)")
+        print(f"\n📖 High-Level Summary:\n{repo_summary}\n")
+
         print("📁 Subsystems:")
-        for f in folder_sums[:8]:
+        for f in folder_summaries:
             print(f"   • [{f.name}] ({f.target_path}): {f.summary_text}")
         print()
 
 def cmd_flow(args):
     """Trace code execution flow starting from a symbol or entry point."""
     target = args.target.strip()
-    entry = args.entry.strip()
+    entry = (args.entry or args.entry_pos or "").strip()
+
+    if not entry:
+        print(f"❌ Please provide an entry symbol to trace. Example: wia flow {target} handle_login")
+        return
 
     with get_db_session() as session:
         repo = get_repo(session, target)
@@ -175,7 +196,6 @@ def cmd_flow(args):
 def cmd_impact(args):
     """Analyze change impact for a symbol or file."""
     target = args.target.strip()
-    symbol = args.symbol.strip()
 
     with get_db_session() as session:
         repo = get_repo(session, target)
@@ -187,6 +207,23 @@ def cmd_impact(args):
         symbols = session.exec(select(ASTSymbol).where(ASTSymbol.repo_id == repo.id)).all()
         graph = CodeKnowledgeGraph(repo.id, session=session)
         graph.build_from_ast_and_files(nodes, symbols)
+
+        if args.diff:
+            # Impact from git diff
+            diff_status = GitIntelligence.get_git_diff_status(repo.source_path or ".")
+            changed = diff_status["modified_files"] + diff_status["added_files"]
+            print(f"\n💥 Git Diff Blast Radius Analysis for '{repo.name}':")
+            print(f"   - Changed Files: {len(changed)}")
+            for cf in changed:
+                impact = graph.analyze_impact(cf)
+                print(f"   • {cf} -> {impact['direct_impact_count']} direct dependents, {impact['affected_files_count']} affected files")
+            print()
+            return
+
+        symbol = (args.symbol or args.symbol_pos or "").strip()
+        if not symbol:
+            print(f"❌ Please provide a symbol or file to analyze. Example: wia impact {target} AuthService")
+            return
 
         impact = graph.analyze_impact(symbol)
         print(f"\n💥 Change Impact Analysis for '{symbol}' in '{repo.name}':")
@@ -203,6 +240,64 @@ def cmd_impact(args):
             for f in impact['affected_files'][:10]:
                 print(f"      • {f}")
         print()
+
+def cmd_diff(args):
+    """Analyze git diff changes and modified symbols in the workspace."""
+    target = (args.target or ".").strip()
+    with get_db_session() as session:
+        repo = get_repo(session, target)
+        repo_path = repo.source_path if repo else (target if os.path.exists(target) else ".")
+
+        diff_data = GitIntelligence.get_git_diff_status(repo_path)
+        print(f"\n📊 Git Diff Analysis for '{repo.name if repo else repo_path}':")
+        print(f"   - Git Repository:   {'Yes' if diff_data['is_git_repo'] else 'No'}")
+        print(f"   - Modified Files:   {len(diff_data['modified_files'])}")
+        print(f"   - Added Files:      {len(diff_data['added_files'])}")
+        print(f"   - Deleted Files:    {len(diff_data['deleted_files'])}")
+
+        all_changed = diff_data['modified_files'] + diff_data['added_files']
+        if all_changed:
+            symbols = GitIntelligence.analyze_diff_symbols(repo_path, all_changed)
+            print(f"\n🔍 Affected Symbols in Changed Files ({len(symbols)}):")
+            for s in symbols[:15]:
+                print(f"   • [{s['type']}] {s['name']} ({s['file']}:{s['line']})")
+        print()
+
+def cmd_watch(args):
+    """Continuously monitor workspace and incrementally update knowledge model on change."""
+    target = args.target.strip()
+    interval = args.interval
+
+    with get_db_session() as session:
+        repo = get_repo(session, target)
+        repo_path = repo.source_path if repo else (target if os.path.exists(target) else None)
+        if not repo_path or not os.path.exists(repo_path):
+            print(f"❌ Target path '{target}' does not exist.")
+            return
+
+        print(f"\n👁️ [WIA Watcher] Monitoring '{repo_path}' every {interval}s (Press Ctrl+C to stop)...")
+        _, _, _, previous_hashes = IncrementalIndexer.detect_changes(repo_path, {})
+
+        try:
+            while True:
+                time.sleep(interval)
+                added, modified, deleted, current_hashes = IncrementalIndexer.detect_changes(repo_path, previous_hashes)
+                if added or modified or deleted:
+                    print(f"\n⚡ Changes detected at {time.strftime('%X')}:")
+                    if added:
+                        print(f"   + Added ({len(added)}): {', '.join(added[:5])}")
+                    if modified:
+                        print(f"   ~ Modified ({len(modified)}): {', '.join(modified[:5])}")
+                    if deleted:
+                        print(f"   - Deleted ({len(deleted)}): {', '.join(deleted[:5])}")
+                    
+                    if repo:
+                        print(f"   🔄 Updating WIA intelligence for '{repo.name}'...")
+                        run_ingestion_pipeline(repo.id, repo_path)
+                        print("   ✅ Knowledge model and graph updated.")
+                    previous_hashes = current_hashes
+        except KeyboardInterrupt:
+            print("\n🛑 Watcher stopped.")
 
 def cmd_health(args):
     """Run health and complexity audit on a repository."""
@@ -248,26 +343,41 @@ def cmd_parse(args):
         return
 
     ext = os.path.splitext(file_path)[1].lower()
-    from app.services.ingestion.crawler import LANG_EXTENSIONS
-    lang = LANG_EXTENSIONS.get(ext, "Other")
-
     with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
         content = f.read()
 
-    symbols = ASTParserEngine.parse_file("cli_dummy", os.path.basename(file_path), content, lang)
-    print(f"\n🔍 AST Analysis for: {file_path} ({lang} - {len(content.splitlines())} LOC)")
-    print(f"Found {len(symbols)} symbols:\n")
-    print(f"{'TYPE':<12} | {'NAME':<24} | {'LINE':<8} | {'SIGNATURE / DETAILS'}")
+    symbols = ASTParserEngine.parse_file_symbols(content, ext, file_path)
+    print(f"\n🌲 Parsed AST Symbols in '{file_path}' ({len(symbols)} found):\n")
+    print(f"{'TYPE':<12} | {'NAME':<24} | {'LINE':<6} | {'SIGNATURE'}")
     print("-" * 75)
-    for s in symbols:
-        details = s.signature or (", ".join(s.imported_symbols) if s.imported_symbols else "")
-        print(f"{s.symbol_type:<12} | {s.name:<24} | {s.start_line:<8} | {details}")
+    for sym in symbols:
+        print(f"{sym.symbol_type:<12} | {sym.name:<24} | {sym.start_line:<6} | {sym.signature}")
     print("-" * 75 + "\n")
 
-def cmd_symbols(args):
-    """Search symbols across repository."""
+def cmd_summarize(args):
+    """View 5-level hierarchical summaries."""
     target = args.target.strip()
-    search_term = args.search.lower() if args.search else ""
+    with get_db_session() as session:
+        repo = get_repo(session, target)
+        if not repo:
+            print(f"❌ Repository '{target}' not found.")
+            return
+
+        summaries = session.exec(select(WorkspaceSummary).where(WorkspaceSummary.repo_id == repo.id)).all()
+        print(f"\n📚 5-Level Hierarchical Summaries for '{repo.name}':\n")
+        levels = ["repository", "parent_folder", "child_folder", "file", "function"]
+        for lvl in levels:
+            lvl_summaries = [s for s in summaries if s.level == lvl]
+            if lvl_summaries:
+                print(f"--- Level: {lvl.upper()} ({len(lvl_summaries)}) ---")
+                for s in lvl_summaries[:5]:
+                    print(f"  • [{s.name}] ({s.target_path}): {s.summary_text}")
+                print()
+
+def cmd_symbols(args):
+    """Search and list symbols across the codebase."""
+    target = args.target.strip()
+    search = args.search.strip().lower() if args.search else None
 
     with get_db_session() as session:
         repo = get_repo(session, target)
@@ -275,20 +385,20 @@ def cmd_symbols(args):
             print(f"❌ Repository '{target}' not found.")
             return
 
-        statement = select(ASTSymbol).where(ASTSymbol.repo_id == repo.id)
-        symbols = session.exec(statement).all()
-        if search_term:
-            symbols = [s for s in symbols if search_term in s.name.lower()]
+        query = select(ASTSymbol).where(ASTSymbol.repo_id == repo.id)
+        if search:
+            query = query.where(ASTSymbol.name.ilike(f"%{search}%"))
+        symbols = session.exec(query).all()
 
         print(f"\n🔍 Symbols in '{repo.name}' ({len(symbols)} matches):\n")
-        print(f"{'TYPE':<12} | {'NAME':<24} | {'FILE':<30} | {'LINE':<6}")
+        print(f"{'TYPE':<12} | {'NAME':<24} | {'FILE':<30} | {'LINE'}")
         print("-" * 78)
         for s in symbols[:30]:
-            print(f"{s.symbol_type:<12} | {s.name:<24} | {s.file_path:<30} | {s.start_line:<6}")
+            print(f"{s.symbol_type:<12} | {s.name:<24} | {s.file_path[-30:]:<30} | {s.start_line}")
         print("-" * 78 + "\n")
 
 def cmd_dependencies(args):
-    """Inspect import dependencies for a repository."""
+    """Inspect dependency manifests and import relationships."""
     target = args.target.strip()
     with get_db_session() as session:
         repo = get_repo(session, target)
@@ -297,75 +407,78 @@ def cmd_dependencies(args):
             return
 
         imports = session.exec(select(ASTSymbol).where(ASTSymbol.repo_id == repo.id, ASTSymbol.symbol_type == "import")).all()
-        print(f"\n📦 Dependencies & Imports in '{repo.name}' ({len(imports)} statements):\n")
-        print(f"Manifests: {repo.dependencies or []}\n")
-        for imp in imports[:20]:
-            symbols_str = f" -> ({', '.join(imp.imported_symbols)})" if imp.imported_symbols else ""
-            print(f"  • {imp.file_path}:{imp.start_line} imports `{imp.name}`{symbols_str}")
+        print(f"\n📦 Dependencies & Imports in '{repo.name}':")
+        print(f"   - Manifest Files: {repo.dependencies or ['None']}")
+        print(f"   - Parsed Imports: {len(imports)}\n")
+        
+        unique_modules = sorted(list(set([imp.name for imp in imports])))
+        print("🔗 Top Imported Modules:")
+        for mod in unique_modules[:20]:
+            print(f"   • {mod}")
         print()
 
-def cmd_summarize(args):
-    """View hierarchical summaries for a repository."""
+def cmd_export(args):
+    """Export architecture report or Open Knowledge Format (.wia/knowledge/)."""
     target = args.target.strip()
+    fmt = args.format
+    output = args.output
+
     with get_db_session() as session:
         repo = get_repo(session, target)
         if not repo:
             print(f"❌ Repository '{target}' not found.")
             return
 
-        summaries = session.exec(select(WorkspaceSummary).where(WorkspaceSummary.repo_id == repo.id)).all()
-        print(f"\n📚 Hierarchical Summaries for '{repo.name}' ({len(summaries)} total summaries):\n")
-        for s in summaries:
-            level_tag = f"[{s.level.upper()}]"
-            path = f"({s.target_path})" if s.target_path else "(Root)"
-            print(f"{level_tag:<18} {s.name} {path}")
-            print(f"  └─ {s.summary_text}\n")
+        if fmt == "okf":
+            nodes = session.exec(select(FileNode).where(FileNode.repo_id == repo.id)).all()
+            symbols = session.exec(select(ASTSymbol).where(ASTSymbol.repo_id == repo.id)).all()
+            summaries = session.exec(select(WorkspaceSummary).where(WorkspaceSummary.repo_id == repo.id)).all()
+            graph = CodeKnowledgeGraph(repo.id, session=session)
+            graph.build_from_ast_and_files(nodes, symbols)
+
+            out_dir = output or os.path.join(repo.source_path or ".", ".wia", "knowledge")
+            manifest = OKFExporter.export_repository_knowledge(
+                repo=repo,
+                files=nodes,
+                symbols=symbols,
+                summaries=summaries,
+                graph=graph,
+                output_dir=out_dir
+            )
+            print(f"\n📦 Successfully exported Open Knowledge Format (OKF) package to: {out_dir}")
+            print(f"   - Manifest:      {manifest['schema_version']}")
+            print(f"   - Total Entities:{manifest['entities_count']}")
+            print(f"   - Relations:     {manifest['relations_count']}\n")
+            return
+
+        elif fmt == "markdown":
+            summaries = session.exec(select(WorkspaceSummary).where(WorkspaceSummary.repo_id == repo.id)).all()
+            md = f"# Architecture Report: {repo.name}\n\n"
+            md += f"**Total Files**: {repo.total_files} | **LOC**: {repo.total_loc}\n\n"
+            md += "## Subsystems\n"
+            for s in summaries:
+                md += f"- **{s.name}** (`{s.target_path}`): {s.summary_text}\n"
+
+            if output:
+                with open(output, "w", encoding="utf-8") as f:
+                    f.write(md)
+                print(f"✅ Architecture report saved to {output}")
+            else:
+                print("\n" + md)
 
 def cmd_list(args):
     """List all ingested repositories."""
     with get_db_session() as session:
         repos = session.exec(select(Repository)).all()
-        print(f"\n📦 Ingested Repositories ({len(repos)}):\n")
-        print(f"{'REPO ID':<38} | {'NAME':<20} | {'STATUS':<10} | {'FILES':<6} | {'LOC':<8}")
-        print("-" * 90)
+        print(f"\n📂 Ingested Repositories ({len(repos)} total):\n")
+        print(f"{'ID':<38} | {'NAME':<20} | {'FILES':<6} | {'STATUS'}")
+        print("-" * 75)
         for r in repos:
-            print(f"{r.id:<38} | {r.name:<20} | {r.status:<10} | {r.total_files:<6} | {r.total_loc:<8}")
-        print("-" * 90 + "\n")
-
-def cmd_export(args):
-    """Export architecture report or OKF knowledge base."""
-    target = args.target.strip()
-    out_format = args.format or "markdown"
-    output_path = args.output
-
-    with get_db_session() as session:
-        repo = get_repo(session, target)
-        if not repo:
-            print(f"❌ Repository '{target}' not found.")
-            return
-
-        summaries = session.exec(select(WorkspaceSummary).where(WorkspaceSummary.repo_id == repo.id)).all()
-        nodes = session.exec(select(FileNode).where(FileNode.repo_id == repo.id)).all()
-        symbols = session.exec(select(ASTSymbol).where(ASTSymbol.repo_id == repo.id)).all()
-
-        if out_format.lower() == "okf":
-            target_dir = output_path or repo.local_path or "."
-            okf_dir = OKFExporter.export_okf_tree(repo, nodes, symbols, summaries, target_dir)
-            print(f"✅ Open Knowledge Format export generated at: {okf_dir}")
-            return
-
-        repo_sum = next((s.summary_text for s in summaries if s.level == "repository"), "N/A")
-        content = f"# Architecture Report: {repo.name}\n\n- Source: {repo.source_path}\n- Total LOC: {repo.total_loc}\n- Tech Stack: {dict(repo.tech_stack or {})}\n\n## Overview\n{repo_sum}\n"
-
-        if output_path:
-            with open(output_path, "w", encoding="utf-8") as f:
-                f.write(content)
-            print(f"✅ Exported report to {output_path}")
-        else:
-            print(content)
+            print(f"{r.id:<38} | {r.name[:20]:<20} | {r.total_files:<6} | {r.status}")
+        print("-" * 75 + "\n")
 
 def cmd_delete(args):
-    """Delete a repository from database."""
+    """Delete a repository from database and storage."""
     target = args.target.strip()
     with get_db_session() as session:
         repo = get_repo(session, target)
@@ -373,29 +486,18 @@ def cmd_delete(args):
             print(f"❌ Repository '{target}' not found.")
             return
 
-        repo_id = repo.id
-        nodes = session.exec(select(FileNode).where(FileNode.repo_id == repo_id)).all()
-        for n in nodes: session.delete(n)
-        symbols = session.exec(select(ASTSymbol).where(ASTSymbol.repo_id == repo_id)).all()
-        for s in symbols: session.delete(s)
-        summaries = session.exec(select(WorkspaceSummary).where(WorkspaceSummary.repo_id == repo_id)).all()
-        for s in summaries: session.delete(s)
-        chunks = session.exec(select(VectorChunk).where(VectorChunk.repo_id == repo_id)).all()
-        for c in chunks: session.delete(c)
         session.delete(repo)
         session.commit()
-        print(f"✅ Repository '{repo.name}' ({repo_id}) deleted.")
+        print(f"🗑️ Successfully deleted repository '{repo.name}' ({repo.id}).\n")
 
 def cmd_serve(args):
-    """Run FastAPI server daemon for VS Code and APIs."""
+    """Start local FastAPI backend server daemon for VS Code extension."""
     import uvicorn
-    host = args.host or "127.0.0.1"
-    port = args.port or 8000
-    print(f"🌐 Starting WIA Local Engine on http://{host}:{port}")
-    uvicorn.run("app.main:app", host=host, port=port, reload=args.reload)
+    print(f"\n🚀 Starting WIA Local Daemon Server on http://{args.host}:{args.port}...")
+    uvicorn.run("app.main:app", host=args.host, port=args.port, reload=args.reload)
 
 def cmd_test(args):
-    """Run test suite."""
+    """Run automated test suite."""
     import pytest
     root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     pytest.main(["-v", os.path.join(root_dir, "backend", "tests")])
@@ -427,14 +529,28 @@ def build_parser():
     # flow
     p_flow = subparsers.add_parser("flow", help="Trace execution call flow starting from an entry point")
     p_flow.add_argument("target", help="Repository ID or name")
-    p_flow.add_argument("--entry", required=True, help="Function or route entry point name")
+    p_flow.add_argument("entry_pos", nargs="?", default=None, help="Function or route entry point name (positional)")
+    p_flow.add_argument("--entry", default=None, help="Function or route entry point name")
     p_flow.set_defaults(func=cmd_flow)
 
     # impact
     p_imp = subparsers.add_parser("impact", help="Analyze ripple change impact for a symbol or file")
     p_imp.add_argument("target", help="Repository ID or name")
-    p_imp.add_argument("--symbol", required=True, help="Symbol name or file path to analyze")
+    p_imp.add_argument("symbol_pos", nargs="?", default=None, help="Symbol name or file path (positional)")
+    p_imp.add_argument("--symbol", default=None, help="Symbol name or file path to analyze")
+    p_imp.add_argument("--diff", action="store_true", help="Analyze blast radius from uncommitted git diffs")
     p_imp.set_defaults(func=cmd_impact)
+
+    # diff
+    p_diff = subparsers.add_parser("diff", help="Analyze repository Git diff and affected symbols")
+    p_diff.add_argument("target", nargs="?", default=".", help="Repository ID, name, or local directory path")
+    p_diff.set_defaults(func=cmd_diff)
+
+    # watch
+    p_watch = subparsers.add_parser("watch", help="Watch workspace and incrementally reindex on changes")
+    p_watch.add_argument("target", help="Repository path or name to watch")
+    p_watch.add_argument("--interval", type=int, default=3, help="Polling interval in seconds")
+    p_watch.set_defaults(func=cmd_watch)
 
     # health
     p_health = subparsers.add_parser("health", help="Run repository health and complexity audit")

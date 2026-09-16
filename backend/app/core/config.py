@@ -15,14 +15,20 @@ class Settings(BaseSettings):
     # Database
     DATABASE_URL: Optional[str] = os.getenv("DATABASE_URL", None)
     
-    # AI / LLM API Keys
+    # NVIDIA NIM Primary LLM Provider
+    NVIDIA_NIM_API_KEY: Optional[str] = os.getenv("NVIDIA_NIM_API_KEY", os.getenv("NVIDIA_API_KEY", None))
+    NVIDIA_API_KEY: Optional[str] = os.getenv("NVIDIA_API_KEY", None)
+    NVIDIA_NIM_BASE_URL: str = os.getenv("NVIDIA_NIM_BASE_URL", "https://integrate.api.nvidia.com/v1")
+    NVIDIA_NIM_MODEL: str = os.getenv("NVIDIA_NIM_MODEL", "meta/llama-3.1-70b-instruct")
+    NVIDIA_NIM_EMBEDDING_MODEL: Optional[str] = os.getenv("NVIDIA_NIM_EMBEDDING_MODEL", None)
+    
+    # Alternative LLM Providers (optional)
     OPENAI_API_KEY: Optional[str] = os.getenv("OPENAI_API_KEY", None)
     ANTHROPIC_API_KEY: Optional[str] = os.getenv("ANTHROPIC_API_KEY", None)
     GEMINI_API_KEY: Optional[str] = os.getenv("GEMINI_API_KEY", None)
-    NVIDIA_API_KEY: Optional[str] = os.getenv("NVIDIA_API_KEY", None)
-    DEFAULT_LLM_PROVIDER: str = os.getenv("DEFAULT_LLM_PROVIDER", "auto") # auto, gemini, openai, anthropic, nvidia, heuristic
+    DEFAULT_LLM_PROVIDER: str = os.getenv("DEFAULT_LLM_PROVIDER", "nvidia") # nvidia, openai, anthropic, gemini
     
-    # Vector Search
+    # Vector Search & Local Embeddings
     EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
     
     model_config = ConfigDict(env_file=".env", case_sensitive=True, extra="ignore")

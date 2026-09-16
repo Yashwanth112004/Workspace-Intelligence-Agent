@@ -1,0 +1,10 @@
+include README.md
+recursive-include backend/app *.py
+recursive-exclude backend/data *
+recursive-exclude backend/tests *
+recursive-exclude tests *
+recursive-exclude data *
+recursive-exclude frontend *
+recursive-exclude vscode-extension *
+recursive-exclude .pytest_cache *
+global-exclude *.py[cod] __pycache__ *.so .DS_Store .env .env.* *.db *.sqlite3
