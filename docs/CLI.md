@@ -1,117 +1,58 @@
-# 💻 WIA Command-Line Interface (CLI) User Guide
+# 💻 WIA Command-Line Interface (CLI) User Manual
 
-The WIA CLI provides direct terminal access to repository scanning, AST code parsing, hierarchical summarization, RAG queries, metric extraction, and developer environments.
+The WIA CLI provides direct terminal access to repository scanning, AST code parsing, hierarchical summarization, code flow tracing, impact analysis, health audits, and OKF exports.
 
 ---
 
 ## 🛠️ Installation & Execution
 
-Run via `python main.py` or `uv run python main.py` from the project root:
-
 ```bash
 # Display CLI help
 python main.py --help
+# Or when installed via pip:
+wia --help
 ```
 
 ---
 
 ## 📋 Available CLI Commands
 
-### 1. `scan` - Ingest and Analyze a Codebase
-Ingest a local repository directory or clone a public GitHub repository and run the full intelligence pipeline.
-```bash
-# Ingest current local directory
-python main.py scan ./
-
-# Ingest a specific folder with custom name
-python main.py scan /path/to/project --name "My Backend"
-
-# Ingest a GitHub repository
-python main.py scan https://github.com/fastapi/fastapi
-```
-
----
-
-### 2. `query` - Ask AI Technical Questions with RAG
-Ask technical questions about any ingested repository directly from your terminal. Includes source file citations and line numbers.
-```bash
-# Query by repository name
-python main.py query "My Backend" "What database models are defined?"
-
-# Query by repository ID
-python main.py query 9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d "Explain the authentication flow"
-```
+| Command | Usage | Description |
+|---|---|---|
+| **`scan`** | `wia scan <path_or_url> [--name <name>]` | Ingest and analyze a codebase |
+| **`query`** | `wia query <repo> "<question>"` | Ask AI technical questions with exact line citations |
+| **`architecture`** | `wia architecture <repo>` | View architecture overview and knowledge graph |
+| **`flow`** | `wia flow <repo> --entry <symbol>` | Trace execution call flow starting from an entry point |
+| **`impact`** | `wia impact <repo> --symbol <name>` | Analyze ripple change impact for a symbol or file |
+| **`health`** | `wia health <repo>` | Run repository health and complexity audit |
+| **`onboard`** | `wia onboard <repo>` | Generate developer onboarding walkthrough |
+| **`symbols`** | `wia symbols <repo> [--search <term>]` | Search and list AST symbols across the codebase |
+| **`dependencies`**| `wia dependencies <repo>` | Inspect import linkages and package dependencies |
+| **`parse`** | `wia parse <file_path>` | Parse AST symbols from a source file |
+| **`summarize`** | `wia summarize <repo>` | Show 5-level hierarchical summaries |
+| **`list`** | `wia list` | List all ingested repositories |
+| **`export`** | `wia export <repo> --format okf [-o dir]` | Export Open Knowledge Format (`.wia/knowledge/`) |
+| **`delete`** | `wia delete <repo>` | Delete an ingested repository |
+| **`serve`** | `wia serve [--port 8000]` | Start the local WIA backend server daemon |
+| **`test`** | `wia test` | Run automated test suite |
 
 ---
 
-### 3. `parse` - Inspect AST Symbols in a Source File
-Parse and inspect functions, methods, classes, signatures, and imports in any supported file.
+## 💡 Practical Examples
+
 ```bash
-python main.py parse backend/app/services/parser/ast_parser.py
-```
+# 1. Scan current repository
+python main.py scan ./ --name "My Project"
 
----
+# 2. Trace execution call flow
+python main.py flow "My Project" --entry "main"
 
-### 4. `summarize` - View 5-Level Hierarchical Summaries
-Print the bottom-up hierarchical summaries (Repository → Parent Folders → Child Folders → Files → Functions).
-```bash
-python main.py summarize "My Backend"
-```
+# 3. Analyze change impact
+python main.py impact "My Project" --symbol "ASTParserEngine"
 
----
+# 4. Generate Open Knowledge Format documentation
+python main.py export "My Project" --format okf --output ./
 
-### 5. `list` - List All Ingested Repositories
-Display a table of all analyzed repositories, their IDs, status, file counts, and LOC.
-```bash
-python main.py list
-```
-
----
-
-### 6. `metrics` - Codebase Complexity & Statistics
-Display lines of code, language breakdown, total directories, and symbol counts.
-```bash
-python main.py metrics "My Backend"
-```
-
----
-
-### 7. `export` - Generate Architecture Documentation
-Export the complete architectural overview and module summaries into Markdown or JSON.
-```bash
-# Output to terminal
-python main.py export "My Backend" --format markdown
-
-# Save directly to a file
-python main.py export "My Backend" --format markdown --output architecture_report.md
-```
-
----
-
-### 8. `delete` - Remove an Ingested Repository
-Delete repository records, symbols, summaries, and disk caches.
-```bash
-python main.py delete 9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d
-```
-
----
-
-### 9. `serve` - Run the FastAPI Server
-```bash
-python main.py serve --port 8000 --reload
-```
-
----
-
-### 10. `dev` - Launch Full Development Environment
-Starts both FastAPI backend and React Vite dashboard concurrently.
-```bash
-python main.py dev
-```
-
----
-
-### 11. `test` - Run Automated Tests
-```bash
-python main.py test
+# 5. Ask technical questions with hybrid retrieval
+python main.py query "My Project" "How does secret safety redaction work?"
 ```
