@@ -11,6 +11,8 @@ from app.models.workspace import Repository, FileNode, ASTSymbol, WorkspaceSumma
 from app.services.pipeline import run_ingestion_pipeline, IN_MEMORY_CHUNKS, IN_MEMORY_SUMMARIES
 from app.agent.nooa_agent import WIACodeUnderstandingAgent
 from app.services.rag.vector_store import VectorSearchStore
+from app.services.graph.code_graph import CodeKnowledgeGraph
+from app.services.export.okf_exporter import OKFExporter
 
 router = APIRouter(prefix="/api/v1", tags=["WIA Core API"])
 
@@ -26,6 +28,13 @@ class IngestResponse(BaseModel):
 
 class QueryRequest(BaseModel):
     query: str
+
+def get_loaded_graph(repo_id: str, session: Session) -> CodeKnowledgeGraph:
+    graph = CodeKnowledgeGraph(repo_id, session=session)
+    nodes = session.exec(select(FileNode).where(FileNode.repo_id == repo_id)).all()
+    symbols = session.exec(select(ASTSymbol).where(ASTSymbol.repo_id == repo_id)).all()
+    graph.build_from_ast_and_files(nodes, symbols)
+    return graph
 
 @router.post("/ingest", response_model=IngestResponse)
 def ingest_repository(request: IngestRequest, background_tasks: BackgroundTasks, session: Session = Depends(get_session)):
@@ -49,7 +58,6 @@ def ingest_repository(request: IngestRequest, background_tasks: BackgroundTasks,
     session.commit()
     session.refresh(repo)
 
-    # Launch pipeline in background thread
     background_tasks.add_task(run_ingestion_pipeline, repo.id)
 
     return IngestResponse(
@@ -111,7 +119,6 @@ def get_file_details(repo_id: str, path: str = Query(..., description="Relative 
     if not node or node.is_dir:
         raise HTTPException(status_code=404, detail="File not found")
 
-    # Read code content
     code_content = ""
     if os.path.exists(node.path):
         try:
@@ -147,8 +154,6 @@ def get_workspace_summary(repo_id: str, session: Session = Depends(get_session))
         raise HTTPException(status_code=404, detail="Repository not found")
 
     summaries = session.exec(select(WorkspaceSummary).where(WorkspaceSummary.repo_id == repo_id)).all()
-    
-    # Group by level
     repo_summary = [s.model_dump() for s in summaries if s.level == "repository"]
     folder_summaries = [s.model_dump() for s in summaries if s.level in ("child_folder", "parent_folder")]
     file_summaries = [s.model_dump() for s in summaries if s.level == "file"]
@@ -164,12 +169,11 @@ def get_workspace_summary(repo_id: str, session: Session = Depends(get_session))
 
 @router.post("/repos/{repo_id}/query")
 def query_workspace(repo_id: str, request: QueryRequest, session: Session = Depends(get_session)):
-    """Natural-language question answering about the codebase using NOOA Agent + RAG."""
+    """Natural-language question answering about the codebase using NOOA Agent + Hybrid RAG."""
     repo = session.get(Repository, repo_id)
     if not repo:
         raise HTTPException(status_code=404, detail="Repository not found")
 
-    # Load chunks & summaries (cache or database)
     chunks = IN_MEMORY_CHUNKS.get(repo_id)
     if not chunks:
         chunks = session.exec(select(VectorChunk).where(VectorChunk.repo_id == repo_id)).all()
@@ -178,10 +182,65 @@ def query_workspace(repo_id: str, request: QueryRequest, session: Session = Depe
     if not summaries:
         summaries = session.exec(select(WorkspaceSummary).where(WorkspaceSummary.repo_id == repo_id)).all()
 
-    agent = WIACodeUnderstandingAgent(repo, chunks, summaries)
+    symbols = session.exec(select(ASTSymbol).where(ASTSymbol.repo_id == repo_id)).all()
+    graph = get_loaded_graph(repo_id, session)
+
+    agent = WIACodeUnderstandingAgent(repo, chunks, summaries, symbols=symbols, graph=graph)
     result = agent.answer_question(request.query)
 
     return result
+
+@router.get("/repos/{repo_id}/architecture")
+def get_architecture_graph(repo_id: str, session: Session = Depends(get_session)):
+    """Returns the code knowledge graph and subsystem architecture nodes."""
+    repo = session.get(Repository, repo_id)
+    if not repo:
+        raise HTTPException(status_code=404, detail="Repository not found")
+
+    graph = get_loaded_graph(repo_id, session)
+    return graph.get_architecture_graph()
+
+@router.get("/repos/{repo_id}/impact")
+def analyze_change_impact(repo_id: str, target: str = Query(..., description="Symbol name or file path"), session: Session = Depends(get_session)):
+    """Calculates ripple change impact for a symbol or file."""
+    repo = session.get(Repository, repo_id)
+    if not repo:
+        raise HTTPException(status_code=404, detail="Repository not found")
+
+    graph = get_loaded_graph(repo_id, session)
+    return graph.analyze_impact(target)
+
+@router.get("/repos/{repo_id}/flow")
+def trace_execution_flow(repo_id: str, entry: str = Query(..., description="Entry function or route name"), session: Session = Depends(get_session)):
+    """Traces function call chain starting from an entry point."""
+    repo = session.get(Repository, repo_id)
+    if not repo:
+        raise HTTPException(status_code=404, detail="Repository not found")
+
+    graph = get_loaded_graph(repo_id, session)
+    return {"repo_id": repo_id, "entry": entry, "flow": graph.trace_flow(entry)}
+
+@router.get("/repos/{repo_id}/onboard")
+def get_onboarding_guide(repo_id: str, session: Session = Depends(get_session)):
+    """Generates an architectural developer onboarding guide."""
+    repo = session.get(Repository, repo_id)
+    if not repo:
+        raise HTTPException(status_code=404, detail="Repository not found")
+
+    summaries = session.exec(select(WorkspaceSummary).where(WorkspaceSummary.repo_id == repo_id)).all()
+    agent = WIACodeUnderstandingAgent(repo, [], summaries)
+    return agent.onboarding_guide()
+
+@router.get("/repos/{repo_id}/health")
+def get_repository_health(repo_id: str, session: Session = Depends(get_session)):
+    """Performs repository health, complexity, and structural audit."""
+    repo = session.get(Repository, repo_id)
+    if not repo:
+        raise HTTPException(status_code=404, detail="Repository not found")
+
+    symbols = session.exec(select(ASTSymbol).where(ASTSymbol.repo_id == repo_id)).all()
+    agent = WIACodeUnderstandingAgent(repo, [], [], symbols=symbols)
+    return agent.audit_health()
 
 @router.get("/repos/{repo_id}/symbols/search")
 def search_symbols(
@@ -280,10 +339,10 @@ def get_dependency_graph(repo_id: str, session: Session = Depends(get_session)):
 @router.get("/repos/{repo_id}/export")
 def export_repository_report(
     repo_id: str,
-    format: str = Query("markdown", description="Export format: 'markdown' or 'json'"),
+    format: str = Query("markdown", description="Export format: 'markdown', 'json', or 'okf'"),
     session: Session = Depends(get_session)
 ):
-    """Export complete architecture summary, symbols, and metrics as Markdown or JSON."""
+    """Export complete architecture summary, symbols, and metrics as Markdown, JSON, or OKF."""
     repo = session.get(Repository, repo_id)
     if not repo:
         raise HTTPException(status_code=404, detail="Repository not found")
@@ -291,6 +350,11 @@ def export_repository_report(
     summaries = session.exec(select(WorkspaceSummary).where(WorkspaceSummary.repo_id == repo_id)).all()
     symbols = session.exec(select(ASTSymbol).where(ASTSymbol.repo_id == repo_id)).all()
     nodes = session.exec(select(FileNode).where(FileNode.repo_id == repo_id)).all()
+
+    if format.lower() == "okf":
+        target_dir = repo.local_path or os.path.join(settings.REPOS_DIR, repo_id)
+        okf_path = OKFExporter.export_okf_tree(repo, nodes, symbols, summaries, target_dir)
+        return {"message": f"OKF knowledge export generated successfully at {okf_path}", "okf_path": okf_path}
 
     if format.lower() == "json":
         return {
@@ -300,7 +364,6 @@ def export_repository_report(
             "files_count": len(nodes)
         }
 
-    # Markdown export
     repo_sum = next((s.summary_text for s in summaries if s.level == "repository"), "No overview available.")
     folder_sums = [s for s in summaries if s.level in ("parent_folder", "child_folder")]
     file_sums = [s for s in summaries if s.level == "file"]
@@ -337,32 +400,25 @@ def delete_repository(repo_id: str, session: Session = Depends(get_session)):
     if not repo:
         raise HTTPException(status_code=404, detail="Repository not found")
 
-    # Delete disk files if in data/repos
     target_dir = os.path.join(settings.REPOS_DIR, repo_id)
     if os.path.exists(target_dir):
         shutil.rmtree(target_dir, ignore_errors=True)
 
-    # Delete database records
     nodes = session.exec(select(FileNode).where(FileNode.repo_id == repo_id)).all()
-    for n in nodes:
-        session.delete(n)
+    for n in nodes: session.delete(n)
 
     symbols = session.exec(select(ASTSymbol).where(ASTSymbol.repo_id == repo_id)).all()
-    for s in symbols:
-        session.delete(s)
+    for s in symbols: session.delete(s)
 
     summaries = session.exec(select(WorkspaceSummary).where(WorkspaceSummary.repo_id == repo_id)).all()
-    for sum_item in summaries:
-        session.delete(sum_item)
+    for sum_item in summaries: session.delete(sum_item)
 
     chunks = session.exec(select(VectorChunk).where(VectorChunk.repo_id == repo_id)).all()
-    for c in chunks:
-        session.delete(c)
+    for c in chunks: session.delete(c)
 
     session.delete(repo)
     session.commit()
 
-    # Clear memory cache
     IN_MEMORY_CHUNKS.pop(repo_id, None)
     IN_MEMORY_SUMMARIES.pop(repo_id, None)
 
