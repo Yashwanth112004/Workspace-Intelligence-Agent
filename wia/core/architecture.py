@@ -161,11 +161,11 @@ class ArchitectureAnalyzer:
 
                         if in_scripts and "=" in line_s and not line_s.startswith("#"):
                             k, v = line_s.split("=", 1)
-                            entry_points.append(f"`{k.strip()}` -> `{v.strip().strip('\"').strip('\'')}`")
+                            clean_v = v.strip().strip('"').strip("'")
+                            entry_points.append(f"`{k.strip()}` -> `{clean_v}`")
                 except Exception:
-                    pass
-
-        # Fallback to source entrypoints
+                 pass
+              # Fallback to source entrypoints
         if not entry_points:
             for rel_p in ("wia/cli/app.py", "wia/__main__.py", "wia/cli/main.py"):
                 if rel_p in index.files:
