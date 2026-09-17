@@ -1,9 +1,8 @@
 name: Publish WIA to PyPI
 
 on:
-  push:
-    tags:
-      - "v*.*.*"
+  release:
+    types: [published]
   workflow_dispatch:
 
 jobs:
@@ -22,10 +21,10 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install dependencies
+      - name: Install build & test dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install build pytest click pathspec
+          python -m pip install build twine pytest click pathspec
 
       - name: Run test suite
         run: |
@@ -34,6 +33,10 @@ jobs:
       - name: Build wheel and sdist
         run: |
           python -m build
+
+      - name: Validate distribution metadata with twine check
+        run: |
+          python -m twine check dist/*
 
       - name: Publish distribution to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1

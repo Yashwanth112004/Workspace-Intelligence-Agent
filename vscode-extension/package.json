@@ -2,7 +2,7 @@
   "name": "wia-vscode",
   "displayName": "Workspace Intelligence Agent (WIA)",
   "description": "AI-Powered Code Intelligence, Architecture Map, and AST Symbol Explorer for VS Code",
-  "version": "0.3.0",
+  "version": "0.1.0",
   "publisher": "wia-agent",
   "engines": {
     "vscode": "^1.80.0"
