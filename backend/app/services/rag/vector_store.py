@@ -6,15 +6,21 @@ from app.models.workspace import VectorChunk, WorkspaceSummary, FileNode, ASTSym
 
 logger = logging.getLogger("wia.rag")
 
-# Try importing sentence_transformers, fallback gracefully to TF-IDF vectorizer if needed
-HAS_ST = False
-try:
-    from sentence_transformers import SentenceTransformer
-    embedder = SentenceTransformer("all-MiniLM-L6-v2")
-    HAS_ST = True
-    logger.info("SentenceTransformers initialized for vector embeddings.")
-except Exception as e:
-    logger.info(f"SentenceTransformers not loaded ({e}). Using TF-IDF fallback for embeddings.")
+# Try importing sentence_transformers lazily, fallback gracefully to TF-IDF vectorizer if needed
+_embedder = None
+_embedder_initialized = False
+
+def _get_embedder():
+    global _embedder, _embedder_initialized
+    if not _embedder_initialized:
+        _embedder_initialized = True
+        try:
+            from sentence_transformers import SentenceTransformer
+            _embedder = SentenceTransformer("all-MiniLM-L6-v2")
+            logger.info("SentenceTransformers initialized for vector embeddings.")
+        except Exception as e:
+            logger.info(f"SentenceTransformers not loaded ({e}). Using TF-IDF fallback for embeddings.")
+    return _embedder
 
 class VectorSearchStore:
     """RAG Vector Store for Code Chunks and Hierarchical Summaries."""
@@ -102,9 +108,10 @@ class VectorSearchStore:
 
     @staticmethod
     def _compute_embedding(text: str) -> List[float]:
-        if HAS_ST:
+        emb_model = _get_embedder()
+        if emb_model is not None:
             try:
-                emb = embedder.encode(text, convert_to_numpy=True).tolist()
+                emb = emb_model.encode(text, convert_to_numpy=True).tolist()
                 return emb
             except Exception:
                 pass

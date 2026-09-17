@@ -13,26 +13,18 @@ if sys.stdout and hasattr(sys.stdout, "reconfigure"):
     except Exception:
         pass
 
-from app.core.database import init_db, engine
-from app.models.workspace import Repository, FileNode, ASTSymbol, WorkspaceSummary, VectorChunk
-from app.services.ingestion import RepositoryCrawler
-from app.services.parser import ASTParserEngine
-from app.services.summarizer import HierarchicalSummarizerEngine
-from app.services.rag import VectorSearchStore
-from app.agent.nooa_agent import WIACodeUnderstandingAgent
-from app.services.pipeline import run_ingestion_pipeline, IN_MEMORY_CHUNKS, IN_MEMORY_SUMMARIES
-from app.services.graph.code_graph import CodeKnowledgeGraph
-from app.services.export.okf_exporter import OKFExporter
-from app.services.intelligence.incremental_indexer import IncrementalIndexer
-
 logging.basicConfig(level=logging.WARNING, format="%(message)s")
 logger = logging.getLogger("wia.cli")
 
 def get_db_session():
+    from app.core.database import init_db, engine
+    from sqlmodel import Session
     init_db()
     return Session(engine)
 
-def get_repo(session: Session, target: str) -> Optional[Repository]:
+def get_repo(session, target: str):
+    from sqlmodel import select
+    from app.models.workspace import Repository
     repo = session.get(Repository, target)
     if not repo:
         repo = session.exec(select(Repository).where(Repository.name == target)).first()
@@ -42,6 +34,8 @@ def get_repo(session: Session, target: str) -> Optional[Repository]:
 
 def cmd_scan(args):
     """Scan and ingest a repository directly from CLI."""
+    from app.models.workspace import Repository
+    from app.services.pipeline import run_ingestion_pipeline
     source_path = args.path.strip()
     name = args.name or os.path.basename(source_path.rstrip("/\\")) or "Workspace Repo"
     
@@ -82,6 +76,10 @@ def cmd_scan(args):
 
 def cmd_query(args):
     """Query codebase via NOOA Agent & Hybrid RAG from CLI."""
+    from sqlmodel import select
+    from app.models.workspace import VectorChunk, WorkspaceSummary, ASTSymbol, FileNode
+    from app.services.graph.code_graph import CodeKnowledgeGraph
+    from app.agent.nooa_agent import WIACodeUnderstandingAgent
     target = args.target.strip()
     question = args.question.strip()
 
@@ -118,6 +116,9 @@ def cmd_query(args):
 
 def cmd_architecture(args):
     """View architecture breakdown and knowledge graph stats."""
+    from sqlmodel import select
+    from app.models.workspace import WorkspaceSummary, FileNode, ASTSymbol
+    from app.services.graph.code_graph import CodeKnowledgeGraph
     target = args.target.strip()
     with get_db_session() as session:
         repo = get_repo(session, target)
@@ -147,6 +148,9 @@ def cmd_architecture(args):
 
 def cmd_flow(args):
     """Trace code execution flow starting from a symbol or entry point."""
+    from sqlmodel import select
+    from app.models.workspace import FileNode, ASTSymbol
+    from app.services.graph.code_graph import CodeKnowledgeGraph
     target = args.target.strip()
     entry = args.entry.strip()
 
@@ -174,6 +178,9 @@ def cmd_flow(args):
 
 def cmd_impact(args):
     """Analyze change impact for a symbol or file."""
+    from sqlmodel import select
+    from app.models.workspace import FileNode, ASTSymbol
+    from app.services.graph.code_graph import CodeKnowledgeGraph
     target = args.target.strip()
     symbol = args.symbol.strip()
 
@@ -206,6 +213,8 @@ def cmd_impact(args):
 
 def cmd_health(args):
     """Run health and complexity audit on a repository."""
+    from sqlmodel import select
+    from app.models.workspace import ASTSymbol, FileNode
     target = args.target.strip()
     with get_db_session() as session:
         repo = get_repo(session, target)
@@ -228,6 +237,9 @@ def cmd_health(args):
 
 def cmd_onboard(args):
     """Generate onboarding walkthrough for new developers."""
+    from sqlmodel import select
+    from app.models.workspace import WorkspaceSummary
+    from app.agent.nooa_agent import WIACodeUnderstandingAgent
     target = args.target.strip()
     with get_db_session() as session:
         repo = get_repo(session, target)
@@ -249,6 +261,7 @@ def cmd_parse(args):
 
     ext = os.path.splitext(file_path)[1].lower()
     from app.services.ingestion.crawler import LANG_EXTENSIONS
+    from app.services.parser import ASTParserEngine
     lang = LANG_EXTENSIONS.get(ext, "Other")
 
     with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
@@ -266,6 +279,8 @@ def cmd_parse(args):
 
 def cmd_symbols(args):
     """Search symbols across repository."""
+    from sqlmodel import select
+    from app.models.workspace import ASTSymbol
     target = args.target.strip()
     search_term = args.search.lower() if args.search else ""
 
@@ -289,6 +304,8 @@ def cmd_symbols(args):
 
 def cmd_dependencies(args):
     """Inspect import dependencies for a repository."""
+    from sqlmodel import select
+    from app.models.workspace import ASTSymbol
     target = args.target.strip()
     with get_db_session() as session:
         repo = get_repo(session, target)
@@ -306,6 +323,8 @@ def cmd_dependencies(args):
 
 def cmd_summarize(args):
     """View hierarchical summaries for a repository."""
+    from sqlmodel import select
+    from app.models.workspace import WorkspaceSummary
     target = args.target.strip()
     with get_db_session() as session:
         repo = get_repo(session, target)
@@ -323,6 +342,8 @@ def cmd_summarize(args):
 
 def cmd_list(args):
     """List all ingested repositories."""
+    from sqlmodel import select
+    from app.models.workspace import Repository
     with get_db_session() as session:
         repos = session.exec(select(Repository)).all()
         print(f"\n📦 Ingested Repositories ({len(repos)}):\n")
@@ -334,6 +355,9 @@ def cmd_list(args):
 
 def cmd_export(args):
     """Export architecture report or OKF knowledge base."""
+    from sqlmodel import select
+    from app.models.workspace import WorkspaceSummary, FileNode, ASTSymbol
+    from app.services.export.okf_exporter import OKFExporter
     target = args.target.strip()
     out_format = args.format or "markdown"
     output_path = args.output
@@ -366,6 +390,8 @@ def cmd_export(args):
 
 def cmd_delete(args):
     """Delete a repository from database."""
+    from sqlmodel import select
+    from app.models.workspace import FileNode, ASTSymbol, WorkspaceSummary, VectorChunk
     target = args.target.strip()
     with get_db_session() as session:
         repo = get_repo(session, target)
@@ -401,9 +427,16 @@ def cmd_test(args):
     pytest.main(["-v", os.path.join(root_dir, "backend", "tests")])
 
 def build_parser():
+    from app.core.config import settings
     parser = argparse.ArgumentParser(
         prog="wia",
         description="Workspace Intelligence Agent (WIA) - Code Knowledge Graph & Developer Intelligence CLI"
+    )
+    parser.add_argument(
+        "--version",
+        "-v",
+        action="version",
+        version=f"wia version {settings.VERSION}",
     )
     subparsers = parser.add_subparsers(dest="command", help="Available WIA CLI Commands")
 
