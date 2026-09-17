@@ -153,3 +153,30 @@ def test_impact_analyzer_unknown_symbol():
     assert report.found is False
     assert report.risk_level == "NOT_FOUND"
     assert "was not found" in report.explanation
+def test_architecture_entry_points_from_pyproject(tmp_path):
+ """Verify console scripts are extracted from pyproject.toml."""
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        """
+[project.scripts]
+wia = "wia.cli.app:main"
+""",
+        encoding="utf-8",
+    )
+
+    index = WorkspaceIndex(
+        workspace_path=str(tmp_path),
+        files={
+            "pyproject.toml": FileRecord(
+                "pyproject.toml",
+                100,
+                1.0,
+                ".toml",
+                indexing_status=IndexingStatus.INDEXED,
+            )
+        },
+    )
+
+    result = ArchitectureAnalyzer._detect_entry_points(index)
+
+    assert "`wia` -> `wia.cli.app:main`" in result
