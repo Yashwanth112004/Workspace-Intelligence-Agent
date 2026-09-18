@@ -85,10 +85,11 @@ class NvidiaNimProvider(AIProvider):
             "max_tokens": 2500,
         }
 
+        import wia
         headers = {
             "Authorization": f"Bearer {self.api_key.strip()}",
             "Content-Type": "application/json",
-            "User-Agent": "WIA-Workspace-Intelligence-Agent/0.1.1",
+            "User-Agent": f"WIA-Workspace-Intelligence-Agent/{wia.__version__}",
         }
 
         try:
