@@ -47,7 +47,11 @@ wia = "wia.cli.app:cli_entrypoint"
 where = ["."]
 include = ["wia*"]
 
+[tool.pyright]
+extraPaths = ["backend"]
+
 [tool.pytest.ini_options]
 minversion = "7.0"
 addopts = "-ra -q"
 testpaths = ["tests"]
+pythonpath = ["backend"]
