@@ -153,6 +153,7 @@ def test_impact_analyzer_unknown_symbol():
     assert report.found is False
     assert report.risk_level == "NOT_FOUND"
     assert "was not found" in report.explanation
+
 def test_architecture_entry_points_from_pyproject(tmp_path):
     """Verify console scripts are extracted from pyproject.toml."""
     pyproject = tmp_path / "pyproject.toml"
@@ -189,6 +190,19 @@ def test_architecture_entry_points_fallback():
         files={},
     )
 
+def test_architecture_entry_points_from_cli_source():
+    """Verify CLI source entry points are detected as a fallback."""
+    index = WorkspaceIndex(
+        workspace_path="/app",
+        files={
+            "wia/cli/app.py": FileRecord(
+                "wia/cli/app.py",
+                100,
+                1.0,
+                ".py",
+                indexing_status=IndexingStatus.INDEXED,
+            )
+        },
+    )
     result = ArchitectureAnalyzer._detect_entry_points(index)
-
-    assert result == ["`wia` -> `wia.cli.app:main`"]
+    assert result == ["`wia` CLI -> `wia/cli/app.py`"]
