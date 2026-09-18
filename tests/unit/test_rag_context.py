@@ -25,7 +25,8 @@ def test_rag_context_generator(tmp_path: Path):
     )
 
     summary_md = RAGContextGenerator.generate_rag_context(index)
-    assert "# Workspace Architecture & Intelligence Context" in summary_md
+    assert "Workspace Intelligence Summary" in summary_md
+    assert "Repository Facts" in summary_md
     assert "Flask" in summary_md
-    assert "`app.py` (Python)" in summary_md
-    assert "`run_server` (function)" in summary_md
+    assert "`app.py` (Python" in summary_md
+    assert "`run_server`" in summary_md

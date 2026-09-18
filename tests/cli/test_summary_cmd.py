@@ -15,5 +15,6 @@ def test_summary_cmd(tmp_path: Path):
     runner = CliRunner()
     result = runner.invoke(main, ["summary", "--workspace", str(tmp_path)])
     assert result.exit_code == 0
-    assert "Workspace Architecture & Intelligence Context" in result.output
+    assert "Workspace Intelligence Summary" in result.output
+    assert "Repository Facts" in result.output
     assert "main.py" in result.output

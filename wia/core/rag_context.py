@@ -103,6 +103,9 @@ class RAGContextGenerator:
         if framework_evidence:
             for fw in framework_evidence:
                 lines.append(f"- **{fw.name}** ({fw.category}): evidenced in `{fw.evidence_source}`")
+        elif index.frameworks:
+            for fw_name in index.frameworks:
+                lines.append(f"- **{fw_name}**: configured in workspace")
         else:
             lines.append("- Standard multi-module codebase")
         lines.append("")

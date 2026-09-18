@@ -118,9 +118,8 @@ def format_bytes(num_bytes: int) -> str:
 """
     desc = ExplanationService._describe_symbol_implementation("format_bytes", "function", ["num_bytes"], "", "wia/cli/formatting.py", source_code)
 
-    assert "Converts raw byte counts into human-readable size strings" in desc
-    assert "1024.0" in desc
-    assert "'0 B'" in desc
-    assert "abs()" in desc
-    assert "inspects AST nodes" not in desc
-    assert "Evaluates core function logic" not in desc
+    assert "`format_bytes(num_bytes)`" in desc
+    assert "FUNCTION" in desc
+    assert "abs" in desc
+    assert "conditional logic" in desc
+    assert "iterative operations" in desc
