@@ -1,9 +1,14 @@
 [build-system]
+<<<<<<< HEAD
 requires = ["setuptools>=61.0", "wheel"]
+=======
+requires = ["setuptools>=61.0"]
+>>>>>>> 2ab78d98fcf322c67e73494bb177e2091fdefaf5
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "wia-agent"
+<<<<<<< HEAD
 version = "0.3.0"
 description = "Workspace Intelligence Agent (WIA) — Graph-grounded workspace intelligence platform for code understanding, AST parsing, flow tracing, and RAG Q&A"
 readme = "README.md"
@@ -26,6 +31,19 @@ keywords = [
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
+=======
+version = "0.1.1"
+description = "Workspace Intelligence Agent — Indexing and understanding software repositories"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "WIA Developer Team" }
+]
+keywords = ["workspace", "code intelligence", "cli", "indexer", "developer-tools"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+>>>>>>> 2ab78d98fcf322c67e73494bb177e2091fdefaf5
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
@@ -34,6 +52,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Libraries :: Python Modules",
+<<<<<<< HEAD
     "Topic :: Scientific/Engineering :: Artificial Intelligence"
 ]
 dependencies = [
@@ -69,10 +88,31 @@ ai = [
 ]
 postgres = [
     "psycopg2-binary>=2.9.0"
+=======
+]
+dependencies = [
+    "click>=8.1.0",
+    "pathspec>=0.11.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Yashwanth112004/Workspace-Intelligence-Agent"
+Repository = "https://github.com/Yashwanth112004/Workspace-Intelligence-Agent.git"
+"Bug Tracker" = "https://github.com/Yashwanth112004/Workspace-Intelligence-Agent/issues"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "build>=1.0.0",
+>>>>>>> 2ab78d98fcf322c67e73494bb177e2091fdefaf5
 ]
 
 [project.scripts]
-wia = "app.cli:cli_entry"
+wia = "wia.cli.app:cli_entrypoint"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["wia*"]
 
 [project.urls]
 Homepage = "https://github.com/WIA-Agent/workspace-intelligence-agent"
@@ -89,6 +129,12 @@ include = ["app*"]
 exclude = ["tests*", "data*"]
 
 [tool.pytest.ini_options]
+<<<<<<< HEAD
 pythonpath = ["backend"]
 testpaths = ["backend/tests"]
 python_files = ["test_*.py"]
+=======
+minversion = "7.0"
+addopts = "-ra -q"
+testpaths = ["tests"]
+>>>>>>> 2ab78d98fcf322c67e73494bb177e2091fdefaf5
