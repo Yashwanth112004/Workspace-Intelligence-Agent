@@ -29,3 +29,5 @@ Thumbs.db
 # Node dependencies & extensions
 node_modules/
 *.vsix
+
+backend/data/

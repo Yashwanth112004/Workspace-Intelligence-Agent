@@ -341,10 +341,9 @@ class WiaImpactPanel {
                 html += '</div>';
 
                 // Direct Callers
-                if (data.direct_impacts && data.direct_impacts.length > 0) {
-                    html += '<div class="section-title">🔗 Direct Callers & Dependents (' + data.direct_impacts.length + ')</div>';
+if (data.direct_dependents && data.direct_dependents.length > 0) {                      html += '<div class="section-title">🔗 Direct Callers & Dependents (' + data.direct_impacts.length + ')</div>';
                     html += '<div class="item-list">';
-                    data.direct_impacts.forEach(item => {
+                    data.direct_dependents.forEach(item => {
                         html += '<div class="item-card">';
                         html += '  <div class="item-info">';
                         html += '    <span class="item-name">' + (item.name || item.symbol_name || 'Dependent') + ' (' + (item.symbol_type || 'caller') + ')</span>';
