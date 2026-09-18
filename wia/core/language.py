@@ -157,10 +157,8 @@ class LanguageDetector:
         if (
             filename_lower.startswith("test_")
             or filename_lower.endswith("_test.py")
-            or filename_lower.endswith(".test.ts")
-            or filename_lower.endswith(".test.js")
-            or filename_lower.endswith(".spec.ts")
-            or filename_lower.endswith(".spec.js")
+            or ".test." in filename_lower
+            or ".spec." in filename_lower
             or any(part in ("tests", "test", "__tests__", "spec", "specs") for part in parts[:-1])
         ):
             return FileType.TEST
