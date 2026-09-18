@@ -34,6 +34,7 @@ class FileRecord:
     extension: str
     content_hash: str = ""
     language: str = "Unknown"
+    file_type: str = "Source Code"
     frameworks: list[str] = field(default_factory=list)
     indexing_status: str = IndexingStatus.INDEXED
     exclusion_reason: str | None = None
@@ -53,6 +54,7 @@ class FileRecord:
             extension=data.get("extension", Path(data["relative_path"]).suffix),
             content_hash=data.get("content_hash", ""),
             language=data.get("language", "Unknown"),
+            file_type=data.get("file_type", "Source Code"),
             frameworks=data.get("frameworks", []),
             indexing_status=data.get("indexing_status", IndexingStatus.INDEXED),
             exclusion_reason=data.get("exclusion_reason", None),
