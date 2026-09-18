@@ -19,6 +19,7 @@ from wia.cli.commands.impact_cmd import impact_cmd
 from wia.cli.commands.ask_cmd import ask_cmd
 from wia.cli.commands.explain_cmd import explain_cmd
 from wia.cli.commands.doctor_cmd import doctor_cmd
+from wia.cli.commands.config_cmd import config_cmd
 from wia.cli.formatting import format_error
 from wia.exceptions import WIAError
 from wia.utils.logger import setup_logger
@@ -41,6 +42,12 @@ Common Commands:
   status     Show current workspace indexing status
   files      List indexed workspace files
   info       Display workspace language & framework metadata
+  search     Search workspace symbols, files, and relationships
+  explain    Explain workspace files, notebooks, or symbols
+  impact     Analyze downstream blast radius and affected tests
+  summary    Generate structured facts & intelligence summary
+  ask        Ask AI reasoning queries grounded in codebase evidence
+  config     Configure AI providers, models, and credentials
   version    Show WIA version information
 """,
     epilog="For detailed command usage, run: wia <command> --help",
@@ -79,6 +86,7 @@ main.add_command(impact_cmd)
 main.add_command(ask_cmd)
 main.add_command(explain_cmd)
 main.add_command(doctor_cmd)
+main.add_command(config_cmd)
 
 
 def cli_entrypoint():

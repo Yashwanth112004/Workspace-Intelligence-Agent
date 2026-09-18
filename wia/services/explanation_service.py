@@ -1,39 +1,21 @@
-"""Workspace-aware developer-level code explanation service for files and code symbols."""
+"""Workspace-aware developer-level code explanation service for files, notebooks, and symbols."""
 
 import ast
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
+
+from wia.analyzers.code.notebook_parser import NotebookParser
 from wia.core.impact import ImpactAnalyzer, ImpactReport
 from wia.core.index_model import WorkspaceIndex
-from wia.knowledge.graph import WorkspaceGraph, GraphNode
+from wia.knowledge.graph import GraphNode, WorkspaceGraph
 
 STD_LIB_MODULES = {
-    "sys",
-    "os",
-    "time",
-    "datetime",
-    "pathlib",
-    "json",
-    "html",
-    "dataclasses",
-    "typing",
-    "subprocess",
-    "hashlib",
-    "re",
-    "math",
-    "collections",
-    "itertools",
-    "functools",
-    "enum",
-    "copy",
-    "tempfile",
-    "shutil",
-    "argparse",
-    "sqlite3",
-    "ast",
-    "inspect",
-    "logging",
+    "sys", "os", "time", "datetime", "pathlib", "json", "html", "dataclasses",
+    "typing", "subprocess", "hashlib", "re", "math", "collections", "itertools",
+    "functools", "enum", "copy", "tempfile", "shutil", "argparse", "sqlite3",
+    "ast", "inspect", "logging", "unittest", "shlex", "concurrent", "queue",
+    "urllib", "http", "socket", "traceback", "gc", "io", "csv", "tempfile",
 }
 
 
@@ -65,7 +47,7 @@ class ExplanationModel:
     batch_id: str = "Batch 1"
     evidence: list[str] = field(
         default_factory=lambda: [
-            "Grounded in Tree-sitter AST parsing, WorkspaceGraph relationship edges, and active workspace index metadata."
+            "Grounded in AST symbol parsing, WorkspaceGraph relationship edges, and workspace metadata."
         ]
     )
 
@@ -110,7 +92,7 @@ class ExplanationModel:
 
 
 class ExplanationService:
-    """Generates grounded, developer-level explanations for workspace files and symbols."""
+    """Generates grounded, developer-level explanations for workspace files, notebooks, and symbols."""
 
     @classmethod
     def _read_source_code(cls, rel_path: str, index: WorkspaceIndex) -> str | None:
@@ -158,7 +140,7 @@ class ExplanationService:
                         "has_conditionals": has_if,
                         "has_loops": has_loop,
                         "has_returns": len(returns) > 0,
-                        "called_functions": sorted(set(calls[:6])),
+                        "called_functions": sorted(set(calls[:8])),
                     }
         except Exception:
             pass
@@ -169,7 +151,7 @@ class ExplanationService:
         """Extract test function names and test descriptions from Python test source code."""
         source = cls._read_source_code(test_rel_path, index)
         if not source:
-            return "Contains automated unit tests exercising target functionality."
+            return "Contains automated test suite exercising target component."
 
         try:
             tree = ast.parse(source)
@@ -185,81 +167,23 @@ class ExplanationService:
                 return f"Contains test suite: {', '.join(test_funcs[:4])}."
         except Exception:
             pass
-        return "Contains regression tests exercising this target component."
+        return "Contains automated regression tests exercising this target component."
 
     @classmethod
     def _describe_symbol_implementation(
         cls, sym_name: str, stype: str, params: list[str], doc: str, rel_path: str, source_code: str | None
     ) -> str:
-        """Generate precise, concrete implementation breakdown for a symbol without generic boilerplate."""
+        """Generate concrete implementation breakdown for a symbol grounded strictly in AST evidence."""
         ast_info = cls._analyze_function_ast(sym_name, source_code)
         doc_clean = doc.strip() if doc else ast_info.get("docstring", "")
         param_str = f"({', '.join(params)})" if params else "()"
 
-        # Specific implementations for known domain functions
-        if sym_name == "format_bytes":
-            return (
-                f"`format_bytes(num_bytes)` [FUNCTION]\n"
-                f"  * Purpose: Converts raw byte counts into human-readable size strings (B, KB, MB, GB, TB).\n"
-                f"  * Implementation: Accepts numeric `num_bytes`. If negative, normalizes value to '0 B'. Iterates through units ['B', 'KB', 'MB', 'GB', 'TB'], repeatedly dividing by 1024.0 until value is less than 1024.0. Formats and returns size string (e.g. '15.2 KB').\n"
-                f"  * Input: `num_bytes: int`\n"
-                f"  * Output: `str` (Human-readable byte size)\n"
-                f"  * Calls: `abs()`, `int()`"
-            )
-        elif sym_name == "format_header":
-            return (
-                f"`format_header(title, subtitle=None)` [FUNCTION]\n"
-                f"  * Purpose: Formats a standard section header for CLI display.\n"
-                f"  * Implementation: Uses `click.style` to format bold Cyan header text (`=== title ===`). If `subtitle` is provided, appends bright_black styled subtitle text on a new line.\n"
-                f"  * Input: `title: str`, `subtitle: str | None`\n"
-                f"  * Output: `str` (Styled header block)\n"
-                f"  * Calls: `click.style()`"
-            )
-        elif sym_name == "format_kv":
-            return (
-                f"`format_kv(key, value, indent=2)` [FUNCTION]\n"
-                f"  * Purpose: Formats key-value status pair for CLI displays.\n"
-                f"  * Implementation: Prepends `indent` leading spaces, styles `key:` in bold, and appends formatted value string.\n"
-                f"  * Input: `key: str`, `value: str`, `indent: int`\n"
-                f"  * Output: `str` (Styled key-value line)\n"
-                f"  * Calls: `click.style()`"
-            )
-        elif sym_name in ("format_error", "format_warning", "format_success"):
-            label = sym_name.replace("format_", "").capitalize()
-            color = "red" if label == "Error" else ("yellow" if label == "Warning" else "green")
-            return (
-                f"`{sym_name}(message)` [FUNCTION]\n"
-                f"  * Purpose: Formats standardized {label.lower()} messages for terminal presentation.\n"
-                f"  * Implementation: Uses `click.style` to prepend a bold {color} `{label}:` prefix to the message string.\n"
-                f"  * Input: `message: str`\n"
-                f"  * Output: `str` (Styled message line)\n"
-                f"  * Calls: `click.style()`"
-            )
-        elif sym_name == "explain_target":
-            return (
-                f"`explain_target(target, index, graph)` [METHOD]\n"
-                f"  * Purpose: Resolves target argument and generates file or symbol explanation.\n"
-                f"  * Implementation: Normalizes target path. Checks WorkspaceIndex for exact file path or filename matches; if 1 match, calls `explain_file()`. If multiple, returns candidate list. Next searches for symbol matches; if 1 match, calls `explain_symbol()`. Otherwise returns ambiguity prompt or unknown target notice.\n"
-                f"  * Input: `target: str`, `index: WorkspaceIndex`, `graph: WorkspaceGraph`\n"
-                f"  * Output: `str` (Formatted explanation or resolution message)\n"
-                f"  * Calls: `WorkspaceGraph.build_from_index()`, `explain_file()`, `explain_symbol()`"
-            )
-        elif sym_name == "explain_file":
-            return (
-                f"`explain_file(rel_path, index, graph)` [METHOD]\n"
-                f"  * Purpose: Formats 13-section developer file explanation text.\n"
-                f"  * Implementation: Calls `build_explanation_model()` to assemble canonical `ExplanationModel`, then formats CLI text sections.\n"
-                f"  * Input: `rel_path: str`, `index: WorkspaceIndex`, `graph: WorkspaceGraph`\n"
-                f"  * Output: `str` (Full 13-section CLI explanation)\n"
-                f"  * Calls: `build_explanation_model()`"
-            )
-
-        # Generic AST-derived implementation details
-        purpose_line = doc_clean if doc_clean else f"Defines {stype} `{sym_name}` within `{rel_path}`."
         calls = ast_info.get("called_functions", [])
         calls_str = f"`{', '.join(calls)}`" if calls else "None"
-        cond_str = " Evaluates branching conditionals (`if`)." if ast_info.get("has_conditionals") else ""
-        loop_str = " Executes iterative loops (`for`/`while`)." if ast_info.get("has_loops") else ""
+        cond_str = " Evaluates conditional logic (`if`)." if ast_info.get("has_conditionals") else ""
+        loop_str = " Executes iterative operations (`for`/`while`)." if ast_info.get("has_loops") else ""
+
+        purpose_line = doc_clean if doc_clean else f"Defines {stype} `{sym_name}` within `{rel_path}`."
 
         return (
             f"`{sym_name}{param_str}` [{stype.upper()}]\n"
@@ -278,38 +202,36 @@ class ExplanationService:
 
         if p_lower.startswith("tests/") or "test_" in p_lower or "_test." in p_lower:
             return "Test Module — Automated verification & test suite"
+        elif p_lower.endswith(".ipynb"):
+            return "Jupyter Notebook — Interactive workflow & experimentation"
         elif "cli/app.py" in p_lower or "main.py" in p_lower or "__main__.py" in p_lower:
-            return "CLI Entry Point — Root application entrypoint & subcommand dispatcher"
+            return "CLI / Application Entry Point — Root application entrypoint"
         elif "cli/commands/" in p_lower or "_cmd.py" in p_lower:
-            return "CLI Command — Subcommand execution & terminal user interface"
-        elif "cli/formatting" in p_lower:
-            return "CLI Presentation — Terminal formatting & user interface helpers"
-        elif "core/config" in p_lower or "constants.py" in p_lower:
-            return "Configuration — Centralized configuration defaults & domain constants"
-        elif "analyzers/code" in p_lower or "ast_parser" in p_lower:
-            return "AST Parser — Structural source code & Tree-sitter AST parser"
-        elif "analyzers/dependency" in p_lower:
-            return "Dependency Analyzer — Package manifest parser & version conflict detector"
-        elif "analyzers/git" in p_lower:
-            return "Git Intelligence Analyzer — Repository commit history & churn hotspot analyzer"
-        elif "analyzers/security" in p_lower or "secret_scanner" in p_lower:
-            return "Security Scanner — Credential & secret pattern scanner with privacy masking"
-        elif "storage/" in p_lower or "sqlite" in p_lower:
-            return "Repository / Storage Layer — Persistence store & SQLite relational database"
-        elif "knowledge/vector" in p_lower:
-            return "Vector Store — Semantic embedding store & similarity search"
-        elif "knowledge/graph" in p_lower:
-            return "Knowledge Graph — Entity relationship graph & dependency engine"
-        elif "llm/" in p_lower:
-            return "LLM Layer — LLM provider abstraction & reasoning service"
-        elif "services/" in p_lower:
-            return "Service Layer — Workflow orchestration & application service logic"
-        elif "utils/report" in p_lower:
-            return "Report Generator — Standalone HTML dashboard & report exporter"
-        elif "utils/" in p_lower:
-            return "Utility — System utility helper module"
+            return "CLI Command — Subcommand execution & terminal interface"
+        elif "cli/formatting" in p_lower or "formatting" in p_lower:
+            return "Presentation Layer — Terminal formatting & output helpers"
+        elif "config" in p_lower or "constants.py" in p_lower:
+            return "Configuration — Centralized defaults, settings & constants"
+        elif "code/" in p_lower or "ast_parser" in p_lower or "parser" in p_lower:
+            return "Code Analysis — Structural source parsing & AST extraction"
+        elif "dependency" in p_lower or "manifest" in p_lower:
+            return "Dependency Analysis — Manifest parsing & conflict detection"
+        elif "git" in p_lower:
+            return "Git Intelligence — Version control & history analysis"
+        elif "security" in p_lower or "secret" in p_lower:
+            return "Security Scanner — Credential & vulnerability detection"
+        elif "storage" in p_lower or "sqlite" in p_lower or "db" in p_lower:
+            return "Storage Layer — Relational database & persistence store"
+        elif "retrieval" in p_lower or "retriever" in p_lower:
+            return "Retrieval Layer — Context selection & evidence indexing"
+        elif "llm" in p_lower or "provider" in p_lower or "reasoning" in p_lower:
+            return "AI / Reasoning Layer — LLM provider abstraction & reasoning"
+        elif "services" in p_lower:
+            return "Service Layer — Application service logic & orchestration"
+        elif "utils" in p_lower or "helpers" in p_lower:
+            return "Utility — Helper functions and common utilities"
         elif "models" in p_lower or "schema" in p_lower or "index_model" in p_lower:
-            return "Data Model — Domain dataclass & serialization schema"
+            return "Data Model — Domain dataclasses & schema definitions"
 
         return "Core Module — Application component"
 
@@ -321,25 +243,15 @@ class ExplanationService:
         if docstring and docstring.strip():
             return docstring.strip()
 
-        p_lower = rel_path.replace("\\", "/").lower()
-        if "formatting.py" in p_lower:
-            return "Centralizes terminal string formatting, color styling, section headers, key-value rendering, and error presentation for WIA CLI output."
-        elif "explanation_service.py" in p_lower:
-            return "Orchestrates multi-stage target resolution, AST code inspection, graph dependency lookup, and grounded 13-section CLI/HTML explanations for workspace files and symbols."
-        elif "constants.py" in p_lower:
-            return "Centralizes filesystem paths, default filenames, directory keys, and configuration constants used across WIA core modules."
-        elif "config.py" in p_lower:
-            return "Manages workspace configuration schemas, default ignore rules, hashing algorithms, and persistent user settings."
-
         fn_names = [
             s.get("name")
             for s in symbols
             if s.get("symbol_type") in ("function", "class")
         ]
         if fn_names:
-            return f"Provides core functionality for {Path(rel_path).stem}, defining symbols: {', '.join(fn_names[:5])}."
+            return f"Provides core functionality for `{Path(rel_path).stem}`, defining: {', '.join(fn_names[:5])}."
 
-        return f"Source module `{Path(rel_path).name}` contributing to the {Path(rel_path).parent} component."
+        return f"Source module `{Path(rel_path).name}` contributing to the `{Path(rel_path).parent}` component."
 
     @classmethod
     def find_related_tests(
@@ -354,8 +266,7 @@ class ExplanationService:
             if norm_p.endswith(".pyc") or "__pycache__" in norm_p or norm_p.endswith(".egg-info"):
                 continue
 
-            if norm_p.startswith("tests/") or "test_" in norm_p:
-                symbols = rec.extra_metadata.get("symbols", [])
+            if norm_p.startswith("tests/") or "test_" in norm_p or "_test" in norm_p:
                 imports = rec.extra_metadata.get("imports", [])
 
                 matched = False
@@ -383,7 +294,18 @@ class ExplanationService:
         raw_imports = rec.extra_metadata.get("imports", [])
         file_name = Path(rel_path).name
         lang = rec.language
-        purpose = cls.infer_purpose(rel_path, symbols)
+        source_code = cls._read_source_code(rel_path, index)
+
+        # Extract module docstring
+        module_doc = ""
+        if source_code and lang == "Python":
+            try:
+                tree = ast.parse(source_code)
+                module_doc = (ast.get_docstring(tree) or "").strip()
+            except Exception:
+                module_doc = ""
+
+        purpose = cls.infer_purpose(rel_path, symbols, docstring=module_doc)
         role = cls.infer_architectural_role(rel_path, symbols, raw_imports)
 
         # 1. Identity & Overview
@@ -392,73 +314,54 @@ class ExplanationService:
             1 for s in symbols if s.get("symbol_type") in ("function", "method")
         )
         what_is_text = (
-            f"This file `{rel_path}` is a {lang} module within WIA fulfilling the architectural role of {role}. "
-            f"It contains {class_cnt} class definition(s) and {func_cnt} function/method definition(s) "
-            f"totaling {rec.file_size} bytes."
+            f"This file `{rel_path}` is a {lang} module fulfilling the architectural role of {role}. "
+            f"It declares {class_cnt} class(es) and {func_cnt} function/method definition(s) totaling {rec.file_size} bytes."
         )
 
         # 2. What it does
-        what_does_text = (
-            f"{purpose} The module provides concrete implementations for its declared symbols, "
-            f"handling parameter inputs, styling options, and component presentation required for this architectural layer."
-        )
+        if module_doc:
+            what_does_text = f"{module_doc}\n\nThe module implements its declared symbols to fulfill its architectural role."
+        elif symbols:
+            top_syms = ", ".join(f"`{s.get('name')}`" for s in symbols[:4] if s.get("name"))
+            what_does_text = f"The module provides implementations for symbols including {top_syms}, handling operations for the {Path(rel_path).parent} layer."
+        else:
+            what_does_text = f"The file `{file_name}` defines workspace configuration, structure, or utility rules."
 
         # 3. How it works
-        if "formatting.py" in rel_path:
+        if symbols:
+            sym_summaries = []
+            for s in symbols[:6]:
+                sname = s.get("name", "")
+                stype = s.get("symbol_type", "")
+                params = s.get("parameters", [])
+                doc = s.get("docstring") or ""
+                p_str = f"({', '.join(params)})" if params else "()"
+                desc = f"`{sname}{p_str}` ({stype})"
+                if doc:
+                    desc += f": {doc.splitlines()[0]}"
+                sym_summaries.append(desc)
+
             how_works_text = (
-                f"When invoked, `{file_name}` executes pure formatting helper functions:\n"
-                f"  * `format_bytes()` receives a numeric byte count and loops through units ('B', 'KB', 'MB', 'GB', 'TB'), "
-                f"dividing by 1024.0 until value is under 1024.0, then returns a formatted string like '15.2 KB'. Normalizes negative values to '0 B'.\n"
-                f"  * `format_header()` uses `click.style` to build bold Cyan section headers (`=== title ===`) with optional bright_black subtitles.\n"
-                f"  * `format_kv()`, `format_error()`, `format_warning()`, and `format_success()` append styled color prefixes to terminal output lines."
-            )
-        elif "explanation_service.py" in rel_path:
-            how_works_text = (
-                f"When invoked, `{file_name}` executes a 4-stage explanation pipeline:\n"
-                f"  1. Target Resolution (`explain_target`): Normalizes target input and checks for exact file paths, exact symbols, or unique symbol names across workspace index.\n"
-                f"  2. AST & Symbol Analysis (`_analyze_function_ast`): Parses source AST trees to extract parameters, docstrings, conditionals, loops, and called functions.\n"
-                f"  3. Graph Relationship Lookup (`WorkspaceGraph`): Queries directional `IMPORTS` and `CALLS` edges to resolve workspace dependencies and `USED BY` reverse dependencies.\n"
-                f"  4. Canonical Model Construction (`build_explanation_model`): Assembles extracted evidence into a canonical ExplanationModel object and formats 13-section CLI/HTML outputs."
+                f"When imported or executed, `{file_name}` orchestrates the following components:\n"
+                + "\n".join(f"  * {s}" for s in sym_summaries)
             )
         else:
-            how_works_text = (
-                f"When invoked, `{file_name}` executes its symbol methods sequentially:\n"
-                f"  1. Input / Parameter Validation: Receives incoming arguments or caller objects.\n"
-                f"  2. Internal Logic & Control Flow: Evaluates conditionals, loops, and symbol calculations.\n"
-                f"  3. Return & Output: Returns computed values, updated dataclass records, or emitted side effects."
-            )
+            how_works_text = f"The file contains structural definitions and configurations evaluated during execution."
 
         # 4. Why it exists
-        if "formatting.py" in rel_path:
+        if symbols:
             why_exists_text = (
-                f"The module centralizes CLI presentation rules so individual commands reuse the same formatting "
-                f"rules for headers, key-values, byte sizes, errors, warnings, and success messages. This keeps output "
-                f"consistent and prevents each command from implementing its own presentation logic."
-            )
-        elif "explanation_service.py" in rel_path:
-            why_exists_text = (
-                f"The module exists to provide grounded, developer-level explanations for workspace files and symbols. "
-                f"By combining AST node parsing, WorkspaceGraph relationship edges, and impact matrices, it produces "
-                f"accurate technical explanations without relying on ungrounded LLM hallucinations."
+                f"The module exists to provide modular, testable implementations for `{file_name}` logic, "
+                f"maintaining clear separation of concerns in the repository."
             )
         else:
-            why_exists_text = (
-                f"The module exists to centralize responsibility for `{file_name}` logic within the WIA codebase, "
-                f"preventing code duplication and maintaining clean component boundaries."
-            )
+            why_exists_text = f"This file exists to configure, test, or support the workspace build and execution environment."
 
         # 5. Role in Project
-        if "formatting.py" in rel_path:
-            role_in_project_text = (
-                f"This module is part of WIA's CLI presentation layer (`wia/cli/formatting.py`). It does not "
-                f"perform repository discovery, AST analysis, dependency analysis, Git analysis, or persistence. "
-                f"Instead, CLI command modules use these helpers to format already-analyzed workspace data for terminal display."
-            )
-        else:
-            role_in_project_text = (
-                f"`{rel_path}` belongs to the {role.split(' — ')[0]} layer. It collaborates with upstream CLI/service "
-                f"orchestrators and downstream persistence/utility components to execute WIA workspace tasks."
-            )
+        role_in_project_text = (
+            f"`{rel_path}` belongs to the {role.split(' — ')[0]} layer. It connects with related workspace modules "
+            f"to perform required tasks."
+        )
 
         # 6. Categorize Dependencies & Used By
         std_deps: list[tuple[str, str]] = []
@@ -471,11 +374,12 @@ class ExplanationService:
                 continue
             base_mod = imp.split(".")[0]
             if base_mod in STD_LIB_MODULES:
-                std_deps.append((imp, f"Standard library module for system data processing."))
-            elif base_mod == "wia":
-                ws_deps.append((imp, f"Workspace import for application functionality."))
+                std_deps.append((imp, f"Standard library module."))
+            elif base_mod in index.files or any(base_mod in p for p in index.files):
+                std_deps_desc = f"Workspace import."
+                ws_deps.append((imp, std_deps_desc))
             else:
-                ext_deps.append((imp, f"Third-party external package dependency."))
+                ext_deps.append((imp, f"External package dependency."))
 
         for edge in graph.get_outgoing_edges(file_node_id):
             if edge.relation_type == "IMPORTS":
@@ -485,10 +389,10 @@ class ExplanationService:
                     dep_purpose = cls.infer_purpose(dep_p, index.files[dep_p].extra_metadata.get("symbols", [])) if dep_p in index.files else "Workspace dependency"
                     ws_deps.append((dep_p, dep_purpose))
 
-        # Reverse Dependencies (Used By) with Exact Imported Symbols
+        # Reverse Dependencies (Used By)
         used_by_items: list[tuple[str, str]] = []
         for edge in graph.get_incoming_edges(file_node_id):
-            if edge.relation_type == "IMPORTS":
+            if edge.relation_type in ("IMPORTS", "CALLS"):
                 source_node = graph.nodes.get(edge.source_id)
                 if (
                     source_node
@@ -497,9 +401,7 @@ class ExplanationService:
                     and not source_node.file_path.endswith(".pyc")
                     and "__pycache__" not in source_node.file_path
                 ):
-                    imp_syms = edge.metadata.get("imported_symbols", [])
-                    syms_str = f" ({', '.join(imp_syms)})" if imp_syms else ""
-                    usage_desc = f"Imports `{file_name}`{syms_str} to format CLI output presentation."
+                    usage_desc = f"Depends on `{file_name}` via {edge.relation_type} relationship."
                     used_by_items.append((source_node.file_path, usage_desc))
 
         sorted_used_by = sorted(set(used_by_items))
@@ -509,47 +411,31 @@ class ExplanationService:
             connects_text = (
                 f"`{rel_path}` is imported by {len(sorted_used_by)} workspace component(s) including "
                 f"{', '.join([u[0] for u in sorted_used_by[:3]])}. It relies on workspace dependencies "
-                f"({', '.join([w[0] for w in ws_deps[:3]])}) to process requests."
+                f"({', '.join([w[0] for w in ws_deps[:3]])})."
             )
         elif sorted_used_by:
             connects_text = (
-                f"`{rel_path}` is a shared presentation utility imported downstream by {len(sorted_used_by)} workspace CLI component(s) "
+                f"`{rel_path}` is imported downstream by {len(sorted_used_by)} workspace component(s) "
                 f"({', '.join([u[0] for u in sorted_used_by[:3]])})."
             )
         elif ws_deps:
             connects_text = (
-                f"`{rel_path}` imports lower-level workspace modules ({', '.join([w[0] for w in ws_deps[:3]])}) "
-                f"and operates near the CLI/orchestration boundary."
+                f"`{rel_path}` imports workspace modules ({', '.join([w[0] for w in ws_deps[:3]])})."
             )
         else:
-            connects_text = (
-                f"`{rel_path}` operates as a self-contained module within WIA's application architecture."
-            )
+            connects_text = f"`{rel_path}` operates as a self-contained module within the workspace."
 
-        # Related Tests & Impact Analysis (Using Exact Target Resolution & Weighted Risk)
         related_tests_list = cls.find_related_tests(rel_path, index)
         impact_report = ImpactAnalyzer.analyze_symbol_impact(rel_path, index, graph)
 
         # Actionable Developer Takeaway
-        if "formatting.py" in rel_path:
-            takeaway_text = (
-                f"DEVELOPER TAKEAWAY:\n"
-                f"This file is a shared CLI presentation utility. It does not perform repository analysis itself; "
-                f"it formats information produced by other WIA components. Changes to its formatting functions can affect "
-                f"multiple CLI commands even though analysis data remains unchanged.\n\n"
-                f"Before modifying it:\n"
-                f"  1. Inspect callers of the changed formatting function across the 16 consuming CLI modules.\n"
-                f"  2. Check related CLI tests in `tests/cli/test_formatting.py`.\n"
-                f"  3. Run `python -m pytest` to verify regression coverage across affected commands."
-            )
-        else:
-            takeaway_text = (
-                f"DEVELOPER TAKEAWAY:\n"
-                f"Before modifying `{rel_path}`, developers should note:\n"
-                f"  * Risk Classification: {impact_report.risk_level}. {impact_report.explanation}\n"
-                f"  * Consuming Modules: {len(sorted_used_by)} workspace component(s) depend on this file.\n"
-                f"  * Verification: Run `python -m pytest` to verify regression coverage across related tests."
-            )
+        takeaway_text = (
+            f"DEVELOPER TAKEAWAY:\n"
+            f"Before modifying `{rel_path}`:\n"
+            f"  * Risk Classification: {impact_report.risk_level} ({impact_report.explanation})\n"
+            f"  * Downstream Dependents: {len(sorted_used_by)} direct consumer(s) identified.\n"
+            f"  * Tests to Verify: {len(related_tests_list)} related test suite file(s)."
+        )
 
         return ExplanationModel(
             target=rel_path,
@@ -577,10 +463,68 @@ class ExplanationService:
         )
 
     @classmethod
+    def explain_notebook(cls, rel_path: str, index: WorkspaceIndex, graph: WorkspaceGraph) -> str:
+        """Generate specialized developer explanation for a Jupyter Notebook (.ipynb)."""
+        abs_p = Path(index.workspace_path) / rel_path
+        nb = NotebookParser.parse_file(abs_p)
+
+        headings_str = "\n".join(f"  * {h}" for h in nb.markdown_headings[:6]) if nb.markdown_headings else "  * No markdown section headers found"
+        flow_str = "\n".join(f"  * {f}" for f in nb.execution_flow[:8]) if nb.execution_flow else "  * Sequential cell execution"
+        syms_str = ", ".join(f"`{s.name}` ({s.symbol_type})" for s in nb.all_symbols[:6]) if nb.all_symbols else "None (executes script cells)"
+        deps_str = ", ".join(nb.external_libraries[:8]) if nb.external_libraries else "None"
+        refs_str = ", ".join(f"`{r}`" for r in nb.workspace_references[:6]) if nb.workspace_references else "None"
+
+        # Check outputs
+        outputs_found = sum(len(c.outputs_summary) for c in nb.cells)
+
+        return f"""WIA Notebook Explanation
+========================
+
+Target: {rel_path}
+
+1. NOTEBOOK OVERVIEW
+--------------------
+File: `{rel_path}` (Jupyter Notebook, Kernel: `{nb.kernel_name}`, Language: `{nb.language}`)
+Total Cells: {nb.total_cells} (Markdown: {nb.markdown_cells_count}, Code: {nb.code_cells_count})
+
+2. PURPOSE
+----------
+{nb.purpose_summary}
+
+3. SECTION STRUCTURE
+--------------------
+{headings_str}
+
+4. EXECUTION FLOW
+-----------------
+{flow_str}
+
+5. IMPORTANT CODE & SYMBOLS
+---------------------------
+Symbols Defined: {syms_str}
+
+6. DEPENDENCIES & LIBRARIES
+---------------------------
+External Libraries: {deps_str}
+
+7. WORKSPACE REFERENCES
+-----------------------
+Referenced Workspace Artifacts: {refs_str}
+
+8. OUTPUTS / RESULTS
+--------------------
+Computed Outputs: {outputs_found} cell(s) produced execution outputs/displays.
+
+9. EVIDENCE
+-----------
+* Grounded in Jupyter Notebook JSON cell structure, AST code cell analysis, and workspace references.
+"""
+
+    @classmethod
     def explain_target(
         cls, target: str, index: WorkspaceIndex, graph: WorkspaceGraph | None = None
     ) -> str:
-        """Main entrypoint for explaining a file or code symbol."""
+        """Main entrypoint for explaining a file, notebook, or code symbol."""
         if graph is None:
             graph = WorkspaceGraph()
             graph.build_from_index(index)
@@ -599,7 +543,10 @@ class ExplanationService:
                 matched_files.append(rel_path)
 
         if len(matched_files) == 1:
-            return cls.explain_file(matched_files[0], index, graph)
+            matched_f = matched_files[0]
+            if matched_f.endswith(".ipynb") or index.files[matched_f].file_type == "Notebook":
+                return cls.explain_notebook(matched_f, index, graph)
+            return cls.explain_file(matched_f, index, graph)
         elif len(matched_files) > 1:
             candidates = "\n".join(
                 [f"  {idx+1}. {f}" for idx, f in enumerate(matched_files)]
@@ -661,7 +608,6 @@ class ExplanationService:
         symbols = model.symbols
         source_code = cls._read_source_code(rel_path, index)
 
-        # 7. SYMBOL / FUNCTION EXPLANATIONS
         sym_blocks: list[str] = []
         for s in symbols:
             stype = s.get("symbol_type")
@@ -780,7 +726,7 @@ If this code changes:
 
 13. EVIDENCE
 ------------
-* Grounded in Tree-sitter AST parsing, WorkspaceGraph relationship edges, and active workspace index metadata.
+* Grounded in AST parsing, WorkspaceGraph relationship edges, and workspace metadata.
 """
 
     @classmethod
@@ -800,7 +746,6 @@ If this code changes:
         line_num = sym.get("line_number", 1)
         param_str = f"({', '.join(params)})" if params else "()"
         source_code = cls._read_source_code(rel_path, index)
-        ast_info = cls._analyze_function_ast(symbol_name, source_code)
 
         sym_desc = cls._describe_symbol_implementation(
             symbol_name, stype, params, doc, rel_path, source_code
@@ -856,11 +801,11 @@ Parent Symbol: {parent or 'None (Top-level)'}
 
 3. WHY IT EXISTS
 ----------------
-Provides reusable {stype} capabilities for `{symbol_name}` within `{rel_path}`, preventing duplicated code across caller modules.
+Provides reusable {stype} capabilities for `{symbol_name}` within `{rel_path}`.
 
 4. DEPENDENCIES & CALLS
 -----------------------
-Executes logic relying on imports and utility methods in `{rel_path}`.
+Executes logic relying on imports and helper methods in `{rel_path}`.
 
 5. CALLED BY / USED BY
 ----------------------
@@ -878,9 +823,9 @@ Direct Dependents ({len(impact_report.direct_dependents)}): {', '.join(impact_re
 
 8. DEVELOPER TAKEAWAY
 ---------------------
-When modifying `{symbol_name}`, inspect parameter signature compatibility across consuming modules and verify test assertions in related test files before committing changes.
+When modifying `{symbol_name}`, inspect signature compatibility across consuming modules and verify test assertions.
 
 9. EVIDENCE
 -----------
-* Grounded in Tree-sitter AST symbol node `{symbol_name}`, caller graph edges, and active workspace index metadata.
+* Grounded in AST symbol node `{symbol_name}`, caller graph edges, and workspace index metadata.
 """

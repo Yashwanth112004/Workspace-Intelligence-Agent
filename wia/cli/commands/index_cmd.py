@@ -13,10 +13,19 @@ from wia.services.indexing_service import IndexingService
     is_flag=True,
     help="Force complete re-indexing of all files.",
 )
+@click.option(
+    "--workers",
+    "-w",
+    type=int,
+    default=None,
+    help="Number of concurrent worker threads for parallel file indexing.",
+)
 @click.pass_context
-def index_cmd(ctx: click.Context, path: str | None, force_reindex: bool) -> None:
+def index_cmd(ctx: click.Context, path: str | None, force_reindex: bool, workers: int | None) -> None:
     """Run the WIA repository indexing pipeline."""
-    result = IndexingService.index_workspace(target_path=path, force_reindex=force_reindex)
+    result = IndexingService.index_workspace(
+        target_path=path, force_reindex=force_reindex, max_workers=workers
+    )
 
     if not result.success:
         click.echo(format_error(result.message), err=True)
@@ -29,6 +38,10 @@ def index_cmd(ctx: click.Context, path: str | None, force_reindex: bool) -> None
     click.echo(format_kv("Files Discovered", str(data.get("total_discovered", 0))))
     click.echo(format_kv("Files Indexed", str(data.get("total_indexed", 0))))
     click.echo(format_kv("Files Ignored", str(data.get("total_ignored", 0))))
+    click.echo(format_kv("Skipped Unchanged", str(data.get("total_skipped_unchanged", 0))))
+    if data.get("total_failed", 0) > 0:
+        click.echo(format_kv("Failed Parses", str(data.get("total_failed", 0))))
+    click.echo(format_kv("Worker Threads", str(data.get("workers_used", 1))))
 
     changes = data.get("changes", {})
     click.echo()
@@ -54,3 +67,4 @@ def index_cmd(ctx: click.Context, path: str | None, force_reindex: bool) -> None
 
     click.echo()
     click.echo(format_kv("Duration", f"{data.get('duration_seconds', 0.0)}s"))
+
