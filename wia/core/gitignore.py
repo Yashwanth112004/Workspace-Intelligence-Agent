@@ -17,7 +17,7 @@ class GitignoreProcessor:
         patterns: list[str] = [".git/", ".wia/"]  # Default metadata excludes
 
         if not self.root_path.exists() or not self.root_path.is_dir():
-            self.spec = pathspec.PathSpec.from_lines("gitwildmatch", patterns)
+            self.spec = pathspec.PathSpec.from_lines("gitignore", patterns)
             return
 
         # 1. Root .gitignore
@@ -55,7 +55,7 @@ class GitignoreProcessor:
             except Exception:
                 pass
 
-        self.spec = pathspec.PathSpec.from_lines("gitwildmatch", patterns)
+        self.spec = pathspec.PathSpec.from_lines("gitignore", patterns)
 
     def is_ignored(self, relative_path: str) -> bool:
         """Check if a relative POSIX file path matches `.gitignore` patterns."""

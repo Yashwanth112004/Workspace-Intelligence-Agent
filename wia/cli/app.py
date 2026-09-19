@@ -39,7 +39,7 @@ from wia.cli.commands.impact_cmd import impact_cmd
 from wia.cli.commands.ask_cmd import ask_cmd
 from wia.cli.commands.explain_cmd import explain_cmd
 from wia.cli.commands.doctor_cmd import doctor_cmd
-from wia.cli.commands.config_cmd import config_group, auth_cmd
+from wia.cli.commands.config_cmd import config_cmd, auth_cmd
 from wia.cli.commands.flow_cmd import flow_cmd
 from wia.cli.commands.diff_cmd import diff_cmd
 from wia.cli.commands.export_cmd import export_cmd
@@ -66,14 +66,18 @@ Common Commands:
   status        Show current workspace indexing status
   files         List indexed workspace files
   info          Display workspace language & framework metadata
+  search        Search workspace symbols, files, and relationships
   ask / query   Ask AI reasoning agent questions grounded in codebase context
-  explain       Explain specific files or declared AST symbols
+  explain       Explain specific files, notebooks, or declared AST symbols
   architecture  View system architecture, boundaries & dependency cycles
   flow          Trace code execution call flow hierarchy
   impact        Analyze refactoring blast radius and caller impact
   diff          Inspect git diff and affected symbols
-  auth          Configure AI provider API keys interactively
+  summary       Generate structured facts & intelligence summary
+  config        Configure AI providers, models, and credentials
+  auth          Interactive setup wizard for AI provider API keys
   doctor        Run system diagnostics and verify environment health
+  export        Export workspace graph and intelligence schema
   serve         Launch local backend server daemon
   version       Show WIA version information
 """,
@@ -85,12 +89,21 @@ Common Commands:
     message="%(prog)s version %(version)s",
 )
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose diagnostic output.")
+@click.option(
+    "--summary",
+    is_flag=True,
+    help="Generate workspace intelligence summary (alias for 'wia summary').",
+)
 @click.pass_context
-def main(ctx: click.Context, verbose: bool) -> None:
+def main(ctx: click.Context, verbose: bool, summary: bool = False) -> None:
     """WIA CLI root entrypoint."""
     ctx.ensure_object(dict)
     ctx.obj["verbose"] = verbose
     ctx.obj["logger"] = setup_logger(verbose=verbose)
+
+    if summary:
+        ctx.invoke(summary_cmd)
+        return
 
     if ctx.invoked_subcommand is None:
         click.echo(f"WIA — Workspace Intelligence Agent (v{wia.__version__})")
@@ -113,7 +126,7 @@ main.add_command(impact_cmd)
 main.add_command(ask_cmd)
 main.add_command(explain_cmd)
 main.add_command(doctor_cmd)
-main.add_command(config_group)
+main.add_command(config_cmd)
 main.add_command(auth_cmd)
 main.add_command(flow_cmd)
 main.add_command(diff_cmd)

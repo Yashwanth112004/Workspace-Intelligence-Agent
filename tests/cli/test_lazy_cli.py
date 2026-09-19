@@ -8,11 +8,11 @@ import wia
 
 
 def test_cli_version_output():
-    """Verify wia --version outputs exact version 0.1.1."""
+    """Verify wia --version outputs exact version 0.1.3."""
     res = subprocess.run([sys.executable, "-m", "wia", "--version"], capture_output=True, text=True)
     assert res.returncode == 0
-    assert "wia version 0.1.1" in res.stdout.strip()
-    assert wia.__version__ == "0.1.1"
+    assert f"wia version {wia.__version__}" in res.stdout.strip()
+    assert wia.__version__ == "0.1.3"
 
 
 def test_cli_version_no_hf_model_loading(monkeypatch):
@@ -30,7 +30,7 @@ def test_cli_version_no_hf_model_loading(monkeypatch):
     runner = CliRunner()
     result = runner.invoke(main, ["--version"])
     assert result.exit_code == 0
-    assert "wia version 0.1.1" in result.output.strip()
+    assert f"wia version {wia.__version__}" in result.output.strip()
 
 
 def test_cli_help_no_hf_model_loading(monkeypatch):

@@ -2,25 +2,18 @@
 __pycache__/
 *.pyc
 *$py.class
-<<<<<<< HEAD
-*.egg-info/
-=======
-
 # Distribution / packaging
 build/
 dist/
 *.egg-info/
 *.whl
 *.tar.gz
-
 # Unit test / coverage / report outputs
->>>>>>> 2ab78d98fcf322c67e73494bb177e2091fdefaf5
 .pytest_cache/
 wia-report.html
 .coverage
 htmlcov/
 .mypy_cache/
-
 # WIA runtime directory & environment files
 .wia/
 .env
@@ -28,9 +21,13 @@ htmlcov/
 .venv/
 venv/
 ENV/
-
 # IDE & OS Specific
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
+# Node dependencies & extensions
+node_modules/
+*.vsix
+
+backend/data/

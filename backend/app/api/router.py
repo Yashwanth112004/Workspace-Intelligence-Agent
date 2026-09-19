@@ -31,8 +31,8 @@ class QueryRequest(BaseModel):
 
 def get_loaded_graph(repo_id: str, session: Session) -> CodeKnowledgeGraph:
     graph = CodeKnowledgeGraph(repo_id, session=session)
-    nodes = session.exec(select(FileNode).where(FileNode.repo_id == repo_id)).all()
-    symbols = session.exec(select(ASTSymbol).where(ASTSymbol.repo_id == repo_id)).all()
+    nodes = list(session.exec(select(FileNode).where(FileNode.repo_id == repo_id)).all())
+    symbols = list(session.exec(select(ASTSymbol).where(ASTSymbol.repo_id == repo_id)).all())
     graph.build_from_ast_and_files(nodes, symbols)
     return graph
 
@@ -174,15 +174,15 @@ def query_workspace(repo_id: str, request: QueryRequest, session: Session = Depe
     if not repo:
         raise HTTPException(status_code=404, detail="Repository not found")
 
-    chunks = IN_MEMORY_CHUNKS.get(repo_id)
+    chunks: List[VectorChunk] = list(IN_MEMORY_CHUNKS.get(repo_id) or [])
     if not chunks:
-        chunks = session.exec(select(VectorChunk).where(VectorChunk.repo_id == repo_id)).all()
+        chunks = list(session.exec(select(VectorChunk).where(VectorChunk.repo_id == repo_id)).all())
 
-    summaries = IN_MEMORY_SUMMARIES.get(repo_id)
+    summaries: List[WorkspaceSummary] = list(IN_MEMORY_SUMMARIES.get(repo_id) or [])
     if not summaries:
-        summaries = session.exec(select(WorkspaceSummary).where(WorkspaceSummary.repo_id == repo_id)).all()
+        summaries = list(session.exec(select(WorkspaceSummary).where(WorkspaceSummary.repo_id == repo_id)).all())
 
-    symbols = session.exec(select(ASTSymbol).where(ASTSymbol.repo_id == repo_id)).all()
+    symbols = list(session.exec(select(ASTSymbol).where(ASTSymbol.repo_id == repo_id)).all())
     graph = get_loaded_graph(repo_id, session)
 
     agent = WIACodeUnderstandingAgent(repo, chunks, summaries, symbols=symbols, graph=graph)
@@ -227,7 +227,7 @@ def get_onboarding_guide(repo_id: str, session: Session = Depends(get_session)):
     if not repo:
         raise HTTPException(status_code=404, detail="Repository not found")
 
-    summaries = session.exec(select(WorkspaceSummary).where(WorkspaceSummary.repo_id == repo_id)).all()
+    summaries = list(session.exec(select(WorkspaceSummary).where(WorkspaceSummary.repo_id == repo_id)).all())
     agent = WIACodeUnderstandingAgent(repo, [], summaries)
     return agent.onboarding_guide()
 
@@ -238,7 +238,7 @@ def get_repository_health(repo_id: str, session: Session = Depends(get_session))
     if not repo:
         raise HTTPException(status_code=404, detail="Repository not found")
 
-    symbols = session.exec(select(ASTSymbol).where(ASTSymbol.repo_id == repo_id)).all()
+    symbols = list(session.exec(select(ASTSymbol).where(ASTSymbol.repo_id == repo_id)).all())
     agent = WIACodeUnderstandingAgent(repo, [], [], symbols=symbols)
     return agent.audit_health()
 
@@ -347,9 +347,9 @@ def export_repository_report(
     if not repo:
         raise HTTPException(status_code=404, detail="Repository not found")
 
-    summaries = session.exec(select(WorkspaceSummary).where(WorkspaceSummary.repo_id == repo_id)).all()
-    symbols = session.exec(select(ASTSymbol).where(ASTSymbol.repo_id == repo_id)).all()
-    nodes = session.exec(select(FileNode).where(FileNode.repo_id == repo_id)).all()
+    summaries = list(session.exec(select(WorkspaceSummary).where(WorkspaceSummary.repo_id == repo_id)).all())
+    symbols = list(session.exec(select(ASTSymbol).where(ASTSymbol.repo_id == repo_id)).all())
+    nodes = list(session.exec(select(FileNode).where(FileNode.repo_id == repo_id)).all())
 
     if format.lower() == "okf":
         target_dir = repo.local_path or os.path.join(settings.REPOS_DIR, repo_id)

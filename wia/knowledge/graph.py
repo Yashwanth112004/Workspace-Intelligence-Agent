@@ -147,8 +147,51 @@ class WorkspaceGraph:
                     )
                     self.add_edge(file_id, sym_id, relation_type="DEFINES")
 
-        # 2. Process imports and build directional IMPORTS / CALLS edges
+        # 2. Process symbol inheritance and internal calls
         for rel_path, rec in index.files.items():
+            if rec.indexing_status != "INDEXED":
+                continue
+            file_id = f"file:{rel_path}"
+            symbols = rec.extra_metadata.get("symbols", [])
+
+            for sym in symbols:
+                sym_name = sym.get("name", "")
+                sym_type = sym.get("symbol_type", "symbol")
+                if sym_type == "import" or not sym_name:
+                    continue
+
+                sym_id = f"symbol:{rel_path}:{sym_name}"
+
+                # Inheritance edges (INHERITS)
+                base_classes = sym.get("base_classes", [])
+                for base in base_classes:
+                    if base in symbol_file_map:
+                        for tgt_fid, tgt_sid, _ in symbol_file_map[base]:
+                            if tgt_sid != sym_id:
+                                self.add_edge(sym_id, tgt_sid, relation_type="INHERITS")
+                    else:
+                        base_node_id = f"class:{base}"
+                        if base_node_id not in self.nodes:
+                            self.add_node(base_node_id, node_type="class", name=base)
+                        self.add_edge(sym_id, base_node_id, relation_type="INHERITS")
+
+                # Direct Call edges (CALLS)
+                calls = sym.get("calls", [])
+                for call_name in calls:
+                    short_call = call_name.rsplit(".", 1)[-1]
+                    if call_name in symbol_file_map:
+                        for tgt_fid, tgt_sid, _ in symbol_file_map[call_name]:
+                            if tgt_sid != sym_id:
+                                self.add_edge(sym_id, tgt_sid, relation_type="CALLS")
+                    elif short_call in symbol_file_map:
+                        for tgt_fid, tgt_sid, _ in symbol_file_map[short_call]:
+                            if tgt_sid != sym_id:
+                                self.add_edge(sym_id, tgt_sid, relation_type="CALLS")
+
+        # 3. Process imports and build directional IMPORTS / CALLS edges
+        for rel_path, rec in index.files.items():
+            if rec.indexing_status != "INDEXED":
+                continue
             file_id = f"file:{rel_path}"
             symbols = rec.extra_metadata.get("symbols", [])
             raw_imports = set(rec.extra_metadata.get("imports", []))
@@ -171,7 +214,6 @@ class WorkspaceGraph:
                         candidates = symbol_file_map[sym_key]
                         for target_file_id, target_sym_id, qual_n in candidates:
                             if target_file_id != file_id:
-                                # Check if import prefix matches target file path
                                 if imp_clean == short_name or imp_dot.startswith(qual_n.rsplit(".", 1)[0]):
                                     self.add_edge(
                                         file_id,
@@ -207,6 +249,58 @@ class WorkspaceGraph:
                     if import_id not in self.nodes:
                         self.add_node(import_id, node_type=node_t, name=imp_clean)
                     self.add_edge(file_id, import_id, relation_type="IMPORTS")
+
+        # 4. Build TESTS relationship edges (test_file -> target_file)
+        for rel_path, rec in index.files.items():
+            if rec.indexing_status != "INDEXED":
+                continue
+            is_test = (
+                rec.file_type == "Test"
+                or Path(rel_path).name.startswith("test_")
+                or "test" in rel_path.lower()
+            )
+            if not is_test:
+                continue
+
+            test_file_id = f"file:{rel_path}"
+            # Test file imports target file
+            for edge in self.get_outgoing_edges(test_file_id):
+                if edge.relation_type == "IMPORTS" and edge.target_id.startswith("file:"):
+                    target_rec = index.files.get(edge.target_id.replace("file:", ""))
+                    if target_rec and target_rec.file_type != "Test":
+                        self.add_edge(test_file_id, edge.target_id, relation_type="TESTS")
+
+            # Match naming convention: test_foo.py -> foo.py
+            stem = Path(rel_path).stem
+            if stem.startswith("test_"):
+                target_stem = stem[5:]
+                for mod_k, f_id in module_path_map.items():
+                    if f_id != test_file_id and (mod_k == target_stem or mod_k.endswith("." + target_stem)):
+                        self.add_edge(test_file_id, f_id, relation_type="TESTS")
+
+    def remove_file(self, rel_path: str) -> None:
+        """Remove file node and all its defined symbol nodes and connected edges."""
+        file_id = f"file:{rel_path}"
+        nodes_to_remove = {file_id}
+
+        for node_id, node in list(self.nodes.items()):
+            if node.file_path == rel_path or node_id.startswith(f"symbol:{rel_path}:"):
+                nodes_to_remove.add(node_id)
+
+        for nid in nodes_to_remove:
+            self.nodes.pop(nid, None)
+            self._adjacency.pop(nid, None)
+            self._reverse_adjacency.pop(nid, None)
+
+        # Clean edges list and other adjacency entries
+        self.edges = [
+            e for e in self.edges
+            if e.source_id not in nodes_to_remove and e.target_id not in nodes_to_remove
+        ]
+        for src_id, edge_list in list(self._adjacency.items()):
+            self._adjacency[src_id] = [e for e in edge_list if e.target_id not in nodes_to_remove]
+        for tgt_id, edge_list in list(self._reverse_adjacency.items()):
+            self._reverse_adjacency[tgt_id] = [e for e in edge_list if e.source_id not in nodes_to_remove]
 
     def get_outgoing_edges(self, node_id: str) -> list[GraphEdge]:
         """Return all outgoing edges from target node."""

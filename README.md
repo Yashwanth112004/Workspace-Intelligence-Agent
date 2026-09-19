@@ -6,26 +6,52 @@
 [![VS Code Extension](https://img.shields.io/badge/VS_Code_Extension-Ready-007ACC.svg)](https://code.visualstudio.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**Workspace Intelligence Agent (WIA)** is an enterprise-grade, graph-grounded workspace intelligence platform that builds a structured understanding of an entire software repository. It uses that knowledge to answer questions, explain architecture, trace execution flow, analyze dependency impact, onboard developers, and provide grounded AI reasoning with exact file and line citations.
+**Workspace Intelligence Agent (WIA)** is an enterprise-grade, graph-grounded workspace intelligence platform and codebase reasoning engine that builds a structured understanding of an entire software repository. It parses source structures, analyzes abstract syntax trees (AST), constructs rich entity relationship graphs, processes Jupyter notebooks, and grounds AI reasoning in verified codebase evidence.
 
-WIA is distributed on PyPI as **`wia-agent`** providing the **`wia`** CLI tool, paired with a **Native VS Code Extension**.
-
+```text
+Repository
+    ↓
+Files & Notebooks
+    ↓
+Source Structure & AST
+    ↓
+Symbols & Base Classes
+    ↓
+Dependencies & Call Graphs
+    ↓
+Architecture & Boundaries
+    ↓
+WorkspaceRetriever & Context Budgeting
+    ↓
+AI Reasoning Engine (NVIDIA NIM / Provider Abstraction)
+    ↓
+Evidence-Grounded Answer with Line Citations
+```
 
 ---
 
-## ⚡ Key Highlights & Core Capabilities
+## ⚡ Core Principles & Capabilities
 
-* 🔍 **Multi-Stage Indexing Pipeline**: Crawls workspace, respects `.gitignore`, computes SHA-256 content hashes, detects programming languages & tech stacks, and runs specialized analyzers.
-* 🌳 **AST & Symbol Parser**: Extracts classes, functions, methods, parameters, docstrings, parent classes, and import statements across multi-language codebases.
-* 🕸️ **Workspace Knowledge Graph**: Maps directional dependency edges (`IMPORTS`, `DEFINES`, `CALLS`, `DEPENDS_ON`) between files and symbols in a persistent SQLite relational store.
-* 📦 **Dependency Manifest & Conflict Detection**: Parses package manifests (`pyproject.toml`, `requirements.txt`, `package.json`, `Cargo.toml`, `go.mod`), normalizes package names, categorizes dependency types (`runtime`, `dev`, `optional`, `build`), and flags version mismatches.
-* 🔒 **Security Secret Scanner with 100% Masking**: Identifies exposed credentials (AWS keys, RSA private keys, GitHub PATs, API tokens, Slack webhooks), classifies test fixtures vs real secrets, and enforces 100% secret masking (`AKIA************MPLE`).
-* 📊 **Architecture Boundary & Cycle Intelligence**: Maps system component boundaries, detects circular import dependencies via DFS traversal, computes high fan-in/fan-out metrics, and identifies main entrypoints.
-* 💥 **Symbol Refactoring Impact Analysis**: Evaluates symbol callers and file importers, resolves same-name symbols, differentiates direct callers from file importers, and assigns risk classifications (`LOW`, `MEDIUM`, `HIGH`).
-* 🧠 **Intent-Grounded AI Reasoning Agent**: Answers developer queries (`wia ask`) using lightweight query intent classification and custom RAG context retrieval with NVIDIA NIM, OpenAI, Gemini, Anthropic, or offline intelligence.
-* 📖 **Developer-Level Code Explanation**: Explains target files and symbols (`wia explain`), detailing purpose, architectural role, symbols breakdown, used-by dependents, and likely modification consequences.
-* 📊 **Persistent HTML Narrative Dashboard**: Generates self-contained, batch-accumulating HTML reports (`wia-report.html`) with executive narrative summaries, component architecture cards, and file intelligence tables.
-
+1. **Evidence-Grounded Reasoning (Zero-Hallucination Principle)**:
+   Every explanation and reasoning response is derived strictly from verified workspace source files, AST symbols, imports, call graphs, tests, and configurations. Missing evidence is explicitly stated rather than replaced with generic template statements.
+2. **Provider-Independent AI Architecture**:
+   Modular AI provider abstraction (`AIProvider`) supporting NVIDIA NIM (`NvidiaNimProvider`), OpenAI (`OpenAIProvider`), Google Gemini, Anthropic Claude, and deterministic offline local reasoning (`LocalReasoningProvider`).
+3. **Strict Credential Security**:
+   The PyPI package contains **no bundled credentials**. Users supply their own API keys via environment variables (e.g. `NVIDIA_API_KEY`) or `wia config` / `wia auth`. Secrets are 100% masked in logs and CLI outputs.
+4. **Jupyter Notebook Understanding (`.ipynb`)**:
+   Full cell-level parsing (markdown sections, code cells, imports, functions/classes, execution flow, output summaries) rather than classifying notebooks as "Unknown".
+5. **Parallel & Incremental Indexing Engine**:
+   High-speed multi-worker indexing (`ThreadPoolExecutor`) with SHA-256 hash delta matching, failure isolation on malformed files, and measurable performance duration metrics.
+6. **Multi-Tier Impact Analysis**:
+   Inspects direct dependents, indirect (transitive) dependents, symbol callers, importers, affected tests, affected examples/notebooks, and dependency paths.
+7. **Granular File & Tech Stack Classification**:
+   14 functional file categories (Source Code, Notebook, Test, CI/CD, Build, Dependency Lock, Documentation, Configuration, Data, Asset, Script, Binary, Generated, Unsupported).
+8. **Multi-Stage Indexing Pipeline**:
+   Crawls workspace, respects `.gitignore`, computes SHA-256 content hashes, detects programming languages & tech stacks, and runs specialized analyzers.
+9. **AST & Symbol Parser**:
+   Extracts classes, functions, methods, parameters, docstrings, parent classes, and import statements across multi-language codebases.
+10. **Workspace Knowledge Graph**:
+    Maps directional dependency edges (`IMPORTS`, `DEFINES`, `CALLS`, `DEPENDS_ON`) between files and symbols in a persistent SQLite relational store.
 
 ---
 
@@ -436,238 +462,156 @@ A: Start the daemon with `wia serve` (or `python run_dev.py`). The VS Code exten
 =======
 ### 1. Installation
 
-Install **WIA** from PyPI:
+Install **`wia-agent`** from PyPI:
 
 ```bash
 pip install wia-agent
 ```
 
-Or install locally for development:
-
-```bash
-pip install -e .
-```
-
-Verify installation:
+Verify the installation:
 
 ```bash
 wia --version
-wia --help
 wia doctor
 ```
 
----
-
-## 🛠️ Complete CLI Command Reference Manual
-
-### 1. `wia init` — Initialize Workspace
-
-Initializes the `.wia/` metadata directory and creates `config.json` inside the specified target directory.
->>>>>>> 2ab78d98fcf322c67e73494bb177e2091fdefaf5
+Deterministic features (`index`, `summary`, `search`, `explain`, `impact`, `architecture`, `flow`, `diff`) run completely offline without an API key. To enable LLM reasoning for `wia ask`:
 
 ```bash
-wia init [PATH]
+# Option A: Set via Environment Variable
+export NVIDIA_API_KEY="nvapi-..."
+
+# Option B: Set via WIA Configuration CLI
+wia config --set-key "nvapi-..."
+wia config --set-provider nvidia
+wia config --set-model meta/llama-3.1-70b-instruct
 ```
 
-* **Arguments**: `PATH` (Optional, defaults to current working directory).
-* **Behavior**: Prepares the workspace for indexing and configures default file limit thresholds.
+View active configuration:
 
-**Example**:
 ```bash
-wia init .
+wia config --show
 ```
 
 ---
 
-### 2. `wia index` — Run Indexing & Multi-Analyzer Pipeline
+## 🛠️ CLI Command Reference
 
-Executes file discovery, `.gitignore` filtering, SHA-256 change detection, language & framework detection, AST parsing, dependency manifest analysis, Git hotspot tracking, secret scanning, graph building, and SQLite database persistence.
+### 1. `wia index` — Parallel & Incremental Workspace Indexing
+
+Crawls the workspace, respects `.gitignore`, detects languages & file types, computes SHA-256 hashes, parses AST symbols, builds the `WorkspaceGraph`, and scans for security leaks.
 
 ```bash
-wia index [PATH] [--force-reindex]
-```
+# Standard indexing
+wia index
 
-* **Flags**:
-  * `--force-reindex`, `-f`: Clears existing index state and forces a full re-indexing of all files.
-* **Behavior**: Processes files in deterministic batches, skipping unchanged files via hash comparison. Automatically excludes generated artifacts (`wia-report.html`, `.wia/`, `__pycache__/`, `*.pyc`).
+# Index with 8 parallel worker threads
+wia index --workers 8
 
-**Example**:
-```bash
+# Force complete re-indexing
 wia index --force-reindex
 ```
 
----
+### 2. `wia summary` — Structured Repository Intelligence
 
-### 3. `wia status` — Check Workspace Synchronization Status
-
-Compares the last completed index state against the current filesystem to detect added, modified, or deleted files without mutating index data.
+Generates a comprehensive summary separating factual statistics from architectural intelligence.
 
 ```bash
-wia status [PATH]
+wia summary
 ```
 
-* **States**:
-  * `NOT_INITIALIZED`: Workspace lacks `.wia/` directory.
-  * `NO_INDEX`: Workspace initialized but not yet indexed.
-  * `UP_TO_DATE`: Workspace is synchronized with the filesystem.
-  * `CHANGES_DETECTED`: Files have been added, modified, or deleted since last index.
+* **Repository Facts**: Discovered vs indexed files, languages breakdown, file types (Source, Notebooks, Tests, CI/CD, Manifests), total classes and functions.
+* **Repository Intelligence**: Project purpose, categorized technology stack, entry points, and subsystem architecture.
 
----
+### 3. `wia search` — Relevance-Aware Workspace Search
 
-### 4. `wia files` — List Indexed Workspace Files
-
-Lists all files currently indexed in the workspace with metadata.
+Queries file paths, exact symbols, functions, classes, and docstrings, providing exact line numbers and relevance explanations.
 
 ```bash
-wia files [PATH] [--language LANG]
+wia search Application
+wia search "state persistence"
+wia search --type class --language Python
 ```
 
-* **Flags**:
-  * `--language`, `-l`: Filter listed files by language (e.g. `Python`, `Markdown`, `TOML`).
+### 4. `wia explain` — Code & Notebook Explanation
 
----
-
-### 5. `wia info` — Workspace Overview & Statistics
-
-Displays file counts, language distribution percentages, detected frameworks, and index metadata.
+Produces 13-section technical breakdowns for source files, Jupyter notebooks, or individual symbols.
 
 ```bash
-wia info [PATH]
+# Explain a source file
+wia explain wia/core/retrieval.py
+
+# Explain a Jupyter notebook
+wia explain notebooks/analysis.ipynb
+
+# Explain a specific function or class
+wia explain WorkspaceRetriever
 ```
 
----
+### 5. `wia impact` — Multi-Tier Refactoring Impact Analysis
 
-### 6. `wia analyze` — Run Specialized Workspace Analyzers
-
-Executes targeted security, dependency, or Git repository analyzers.
+Analyzes blast radius, direct callers, indirect transitive dependents, affected unit tests, and affected example workflows.
 
 ```bash
-# Package Manifest & Dependency Conflicts
-wia analyze deps [--workspace PATH]
-
-# Git Commit History & File Churn Hotspots
-wia analyze git [--workspace PATH] [--max-commits 50] [--top-hotspots 10]
-
-# Security Hardcoded Secret Scanner
-wia analyze security [--workspace PATH]
+wia impact wia/core/index_model.py
+wia impact WorkspaceIndex
 ```
 
----
+### 6. `wia ask` — Evidence-Grounded AI Reasoning
 
-### 7. `wia architecture` — System Subsystem & Component Boundary Map
-
-Analyzes the workspace to produce a factually grounded architectural explanation, mapping subsystem boundaries, entrypoints, circular import cycles (DFS), high fan-in/fan-out metrics, and directory hierarchy.
+Asks natural-language questions about codebase architecture, execution flow, component relationships, or debugging.
 
 ```bash
-wia architecture [--workspace PATH]
+wia ask "Explain the project"
+wia ask "How does application execution work?"
+wia ask "What depends on WorkspaceRetriever?"
+wia ask "Where are unit tests located and how is indexing tested?"
 ```
 
 ---
 
-### 8. `wia impact` — Refactoring Impact Analysis
-
-Evaluates downstream callers and file importers for a given target symbol or file, assigning an evidence-backed change risk classification (`LOW`, `MEDIUM`, `HIGH`).
-
-```bash
-wia impact <symbol_or_file> [--workspace PATH]
-```
-
----
-
-### 9. `wia explain` — Developer-Level Code & Symbol Explanation
-
-Generates a complete technical explanation answering: *"What is this code, what does it do, why does it exist, how does it work, how does it fit into the project, what depends on it, and what should a developer know before modifying it?"*
-
-```bash
-wia explain <file_or_symbol> [--workspace PATH]
-```
-
----
-
-### 10. `wia ask` — Grounded AI Reasoning Agent
-
-Answers natural language developer questions grounded in indexed workspace evidence using query intent classification (`ARCHITECTURE`, `WORKFLOW`, `COMPONENT`, `STORAGE`, `FILE_SYMBOL`, `GENERAL`).
-
-```bash
-wia ask "<question>" [--workspace PATH]
-```
-
----
-
-### 11. `wia report` — Generate HTML Intelligence Dashboard
-
-Compiles all workspace intelligence into a self-contained, batch-accumulating HTML report (`wia-report.html`).
-
-```bash
-wia report [--workspace PATH] [--output FILE]
-```
-
----
-
-### 12. `wia search` — Query Workspace Symbols & Files
-
-Executes relevance-scored search across declared AST symbols, function definitions, classes, and file paths.
-
-```bash
-wia search <query> [--workspace PATH] [--language LANG] [--type TYPE] [--limit N]
-```
-
----
-
-### 13. `wia summary` — Export LLM RAG Context Markdown
-
-Exports a structured Markdown summary of the workspace suitable for prompt context injection into external LLMs.
-
-```bash
-wia summary [--workspace PATH] [--output summary.md]
-```
-
----
-
-### 14. `wia doctor` — Environment Health Diagnostic Check
-
-Runs system diagnostics verifying Python version, installed package entrypoints, SQLite database connectivity, and Git CLI availability.
-
-```bash
-wia doctor
-```
-
----
-
-## 🧪 Testing & Quality Assurance
-
-WIA includes a comprehensive automated suite of 154 unit, CLI, and integration tests using `pytest`.
-
-To run the complete test suite:
-
-```bash
-python -m pytest
-```
-
-**Current Test Status**: `154 passed`.
-
----
-
-## 🏗️ Architecture & Internal Subsystem Design
+## 🏗️ Architecture
 
 ```text
-                                WIA CLI (app.py)
-                                       │
-                                       ▼
-                       Service Layer Orchestration
-              (IndexingService, StatusService, ExplanationService)
-                                       │
-       ┌───────────────────────────────┼───────────────────────────────┐
-       ▼                               ▼                               ▼
-Core Inspection                Specialized Analyzers           Knowledge & Storage
-- FileDiscovery                - ASTParser (Python AST)        - WorkspaceIndex
-- FileFilter & Gitignore       - ManifestParser (pyproject)    - WorkspaceGraph
-- FileHasher (SHA-256)         - SecretScanner (Masking)       - SQLiteStore
-- LanguageDetector             - GitAnalyzer                   - VectorStore
+               WIA CLI (Click)
+                      │
+           Intent Classification & Routing
+                      │
+       ┌──────────────┴──────────────┐
+       │                             │
+Deterministic Engine           Reasoning Engine
+       │                             │
+ ┌─────┴──────────────┐       ┌──────┴──────────────┐
+ │ IndexingService    │       │ WorkspaceRetriever  │
+ │ ASTParser          │       │ Context Budgeting   │
+ │ NotebookParser     │       │ Evidence Assembly   │
+ │ WorkspaceGraph     │       │ AIProvider Layer    │
+ │ ImpactAnalyzer     │       │  ├─ NvidiaNim       │
+ │ SearchEngine       │       │  ├─ OpenAI          │
+ └────────────────────┘       │  └─ LocalReasoning  │
+                              └─────────────────────┘
 ```
 
 ---
 
-## 📝 License
+## 🔒 Security & Privacy
 
-Distributed under the MIT License. See `LICENSE` for more information.
+* **Zero Hardcoded Secrets**: No credentials or private tokens are packaged or committed.
+* **100% Secret Masking**: Any API keys in environment or configuration files are masked (`nvapi-...***`).
+* **Offline Determinism**: Indexing, searching, impact analysis, and graph building run 100% locally on your machine.
+
+---
+
+## 🧪 Testing
+
+Run the full automated test suite (174+ unit, integration, and CLI tests):
+
+```bash
+python -m pytest -v
+```
+
+---
+
+## 📄 License
+
+Apache License 2.0. Distributed as `wia-agent` on PyPI.

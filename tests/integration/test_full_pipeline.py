@@ -65,4 +65,5 @@ def test_full_wia_end_to_end_pipeline(tmp_path: Path):
     # 11. Test `wia summary`
     res_summary = runner.invoke(main, ["summary", "--workspace", str(tmp_path)])
     assert res_summary.exit_code == 0
-    assert "Workspace Architecture & Intelligence Context" in res_summary.output
+    assert "Workspace Intelligence Summary" in res_summary.output
+    assert "Repository Facts" in res_summary.output

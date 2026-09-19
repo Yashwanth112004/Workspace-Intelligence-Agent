@@ -1,88 +1,118 @@
-"""WIA CLI `config` and `auth` commands for API key and provider configuration."""
+"""WIA CLI `config` and `auth` commands for managing user settings and AI provider configuration."""
 
+import json
 import os
 from pathlib import Path
 import click
-from wia.cli.formatting import format_error, format_header, format_kv, format_success
+
+from wia.cli.formatting import format_header, format_kv, format_success, format_warning
 from wia.llm.service import _load_env_file
 
 
-@click.group(name="config", help="Manage WIA workspace configuration and AI providers.")
-def config_group() -> None:
-    """Manage WIA workspace configuration and settings."""
-    pass
+CONFIG_FILE_PATH = Path.home() / ".wia" / "config.json"
 
 
-@config_group.command(name="set-key", help="Set LLM API key in workspace .env file.")
-@click.argument("provider", type=click.Choice(["nvidia", "openai", "gemini", "anthropic", "groq", "openrouter"], case_sensitive=False))
-@click.argument("api_key", required=False)
-def config_set_key(provider: str, api_key: str | None) -> None:
-    """Store an LLM API key securely in .env."""
-    if not api_key:
-        api_key = click.prompt(f"Enter API Key for {provider}", hide_input=True).strip()
-
-    var_map = {
-        "nvidia": "NVIDIA_NIM_API_KEY",
-        "openai": "OPENAI_API_KEY",
-        "gemini": "GEMINI_API_KEY",
-        "anthropic": "ANTHROPIC_API_KEY",
-        "groq": "GROQ_API_KEY",
-        "openrouter": "OPENROUTER_API_KEY",
-    }
-    var_name = var_map[provider.lower()]
-
-    env_path = Path.cwd() / ".env"
-    existing_lines = []
-    if env_path.exists():
-        with open(env_path, "r", encoding="utf-8") as f:
-            existing_lines = f.readlines()
-
-    # Update or append
-    updated = False
-    new_lines = []
-    for line in existing_lines:
-        if line.strip().startswith(f"{var_name}="):
-            new_lines.append(f"{var_name}={api_key}\n")
-            updated = True
-        else:
-            new_lines.append(line)
-
-    if not updated:
-        if new_lines and not new_lines[-1].endswith("\n"):
-            new_lines.append("\n")
-        new_lines.append(f"{var_name}={api_key}\n")
-
-    with open(env_path, "w", encoding="utf-8") as f:
-        f.writelines(new_lines)
-
-    click.echo(format_success(f"Successfully saved {var_name} in {env_path.name}"))
+def _load_user_config() -> dict:
+    """Load global user configuration from ~/.wia/config.json."""
+    if not CONFIG_FILE_PATH.exists():
+        return {}
+    try:
+        with open(CONFIG_FILE_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
 
 
-@config_group.command(name="show", help="Display current AI provider and environment configuration.")
-def config_show() -> None:
-    """Show active environment variables and AI settings."""
+def _save_user_config(cfg: dict) -> None:
+    """Save global user configuration to ~/.wia/config.json."""
+    CONFIG_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(CONFIG_FILE_PATH, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2)
+
+
+@click.command(name="config", help="View or configure AI providers, API keys, and models.")
+@click.option("--set-provider", "-p", help="Set default AI provider (e.g. nvidia, openai, gemini, anthropic, groq, local).")
+@click.option("--set-key", "-k", help="Set AI provider API key.")
+@click.option("--set-model", "-m", help="Set default AI model identifier.")
+@click.option("--set-endpoint", "-e", help="Set custom AI provider endpoint URL.")
+@click.option("--show", is_flag=True, help="Display current AI and workspace configuration.")
+@click.option("--clear-key", is_flag=True, help="Remove stored AI provider API key.")
+def config_cmd(
+    set_provider: str | None,
+    set_key: str | None,
+    set_model: str | None,
+    set_endpoint: str | None,
+    show: bool,
+    clear_key: bool,
+) -> None:
+    """Manage WIA user configuration securely."""
+    cfg = _load_user_config()
+    changed = False
+
+    if set_provider:
+        cfg["ai_provider"] = set_provider.lower().strip()
+        changed = True
+        click.echo(format_success(f"Default AI provider set to '{cfg['ai_provider']}'"))
+
+    if set_key:
+        cfg["ai_api_key"] = set_key.strip()
+        changed = True
+        click.echo(format_success("AI API key saved successfully."))
+
+    if set_model:
+        cfg["ai_model"] = set_model.strip()
+        changed = True
+        click.echo(format_success(f"Default AI model set to '{cfg['ai_model']}'"))
+
+    if set_endpoint:
+        cfg["ai_endpoint"] = set_endpoint.strip()
+        changed = True
+        click.echo(format_success(f"AI endpoint set to '{cfg['ai_endpoint']}'"))
+
+    if clear_key:
+        if "ai_api_key" in cfg:
+            del cfg["ai_api_key"]
+            changed = True
+            click.echo(format_success("Stored AI API key removed."))
+
+    if changed:
+        _save_user_config(cfg)
+        return
+
+    # Default: Show active configuration
     _load_env_file()
-    click.echo(format_header("WIA AI Provider & Environment Status"))
+    click.echo(format_header("WIA Configuration"))
 
-    keys = [
-        ("NVIDIA NIM Key", "NVIDIA_NIM_API_KEY", "NVIDIA_API_KEY"),
-        ("OpenAI Key", "OPENAI_API_KEY", None),
-        ("Gemini Key", "GEMINI_API_KEY", None),
-        ("Anthropic Key", "ANTHROPIC_API_KEY", None),
-        ("Groq Key", "GROQ_API_KEY", None),
-        ("OpenRouter Key", "OPENROUTER_API_KEY", None),
-    ]
+    active_provider = cfg.get("ai_provider") or os.environ.get("WIA_AI_PROVIDER") or os.environ.get("WIA_LLM_PROVIDER") or ("nvidia" if (os.environ.get("NVIDIA_API_KEY") or os.environ.get("NVIDIA_NIM_API_KEY")) else "local")
+    click.echo(format_kv("Active AI Provider", active_provider))
 
-    for label, env_v, alt_v in keys:
-        val = os.getenv(env_v) or (os.getenv(alt_v) if alt_v else None)
-        if val:
-            masked = val[:4] + "..." + val[-4:] if len(val) > 8 else "***"
-            status = click.style(f"Configured ({masked})", fg="green")
-        else:
-            status = click.style("Not set (Offline fallback available)", fg="yellow")
-        click.echo(format_kv(label, status))
+    env_key = (
+        os.environ.get("NVIDIA_NIM_API_KEY")
+        or os.environ.get("NVIDIA_API_KEY")
+        or os.environ.get("OPENAI_API_KEY")
+        or os.environ.get("GEMINI_API_KEY")
+        or os.environ.get("ANTHROPIC_API_KEY")
+        or os.environ.get("GROQ_API_KEY")
+    )
+    stored_key = cfg.get("ai_api_key")
 
-    click.echo(format_kv("Default Provider", os.getenv("WIA_LLM_PROVIDER") or "NVIDIA NIM (auto)"))
+    if env_key:
+        masked = env_key[:6] + "..." + env_key[-4:] if len(env_key) > 10 else "***"
+        key_status = f"Configured via Environment Variable ({masked})"
+    elif stored_key:
+        masked = stored_key[:6] + "..." + stored_key[-4:] if len(stored_key) > 10 else "***"
+        key_status = f"Configured in ~/.wia/config.json ({masked})"
+    else:
+        key_status = "Not Set (Set NVIDIA_API_KEY or use 'wia config --set-key')"
+
+    click.echo(format_kv("API Key Status", key_status))
+
+    active_model = cfg.get("ai_model") or os.environ.get("NVIDIA_MODEL") or "meta/llama-3.1-70b-instruct"
+    click.echo(format_kv("AI Model", active_model))
+
+    active_endpoint = cfg.get("ai_endpoint") or os.environ.get("NVIDIA_ENDPOINT") or "https://integrate.api.nvidia.com/v1/chat/completions"
+    click.echo(format_kv("Endpoint", active_endpoint))
+    click.echo(format_kv("Config File", str(CONFIG_FILE_PATH)))
 
 
 @click.command(name="auth", help="Interactive setup wizard for LLM provider API keys.")
@@ -107,4 +137,8 @@ def auth_cmd() -> None:
     p_name = provider_map[choice]
     key = click.prompt(f"Enter your {p_name.upper()} API Key", hide_input=True).strip()
     if key:
-        config_set_key.callback(provider=p_name, api_key=key)
+        cfg = _load_user_config()
+        cfg["ai_provider"] = p_name
+        cfg["ai_api_key"] = key
+        _save_user_config(cfg)
+        click.echo(format_success(f"Successfully configured {p_name.upper()} API key."))

@@ -1,47 +1,166 @@
-"""Abstract base interface and providers for LLM reasoning abstractions."""
+"""AI Provider abstraction layer for workspace intelligence and reasoning."""
 
-import os
+import json
 import logging
+import os
+import urllib.error
+import urllib.request
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import Any, Optional
+
+from wia.core.config import WorkspaceConfig
 
 logger = logging.getLogger("wia.llm")
 
 
-class LLMProvider(ABC):
+class AIProvider(ABC):
     """Abstract interface for executing LLM queries against workspace context."""
 
     @abstractmethod
-    def generate_response(self, prompt: str, context: str) -> str:
+    def generate(self, prompt: str, context: str, options: dict[str, Any] | None = None) -> str:
         """Generate reasoning completion given prompt query and grounded workspace context."""
         pass
 
+    def is_available(self) -> bool:
+        """Check if provider credentials and network endpoints are configured."""
+        return True
 
-class OpenAICompatibleProvider(LLMProvider):
-    """Universal OpenAI-compatible API provider (supports NVIDIA NIM, OpenAI, Groq, OpenRouter)."""
+    def generate_response(self, prompt: str, context: str) -> str:
+        """Backward compatible signature for legacy LLMProvider callers."""
+        return self.generate(prompt, context)
+
+
+class NvidiaNimProvider(AIProvider):
+    """NVIDIA NIM API provider connecting to hosted or self-hosted NIM endpoints."""
+
+    DEFAULT_ENDPOINT = "https://integrate.api.nvidia.com/v1/chat/completions"
+    DEFAULT_MODEL = "meta/llama-3.1-70b-instruct"
 
     def __init__(
         self,
-        api_key: str,
-        base_url: Optional[str] = None,
-        model: Optional[str] = None,
+        api_key: str | None = None,
+        model: str | None = None,
+        endpoint: str | None = None,
+        timeout: float = 45.0,
     ):
-        self.api_key = api_key
-        self.base_url = base_url or "https://api.openai.com/v1"
-        self.model = model or "gpt-4o-mini"
+        if api_key is not None:
+            self.api_key = api_key
+        else:
+            self.api_key = (
+                os.environ.get("NVIDIA_NIM_API_KEY")
+                or os.environ.get("NVIDIA_API_KEY")
+                or os.environ.get("NIM_API_KEY")
+                or ""
+            )
+        self.model = model or os.environ.get("NVIDIA_MODEL") or os.environ.get("NVIDIA_NIM_MODEL") or self.DEFAULT_MODEL
+        self.endpoint = (
+            endpoint
+            or os.environ.get("NVIDIA_ENDPOINT")
+            or os.environ.get("NVIDIA_NIM_ENDPOINT")
+            or self.DEFAULT_ENDPOINT
+        )
+        self.timeout = timeout
 
-    def generate_response(self, prompt: str, context: str) -> str:
-        """Generate reasoning completion using OpenAI-compatible API."""
+    def is_available(self) -> bool:
+        """Verify NVIDIA API key presence without leaking secret."""
+        return bool(self.api_key and self.api_key.strip())
+
+    def generate(self, prompt: str, context: str, options: dict[str, Any] | None = None) -> str:
+        """Query NVIDIA NIM API endpoint with grounded context and prompt."""
+        if not self.is_available():
+            return (
+                "AI provider (NVIDIA NIM) is not configured.\n\n"
+                "To enable AI reasoning, set the environment variable:\n"
+                "  export NVIDIA_API_KEY='nvapi-...'\n\n"
+                "Or configure it via:\n"
+                "  wia config --set-key <YOUR_NVIDIA_API_KEY>\n\n"
+                "Falling back to deterministic workspace retrieval analysis."
+            )
+
+        system_prompt = (
+            "You are WIA (Workspace Intelligence Agent), an expert software architecture and codebase reasoning engine. "
+            "Answer the user's inquiry thoroughly, accurately, and strictly grounded in the provided workspace context and code snippets. "
+            "CRITICAL RULES:\n"
+            "1. NEVER hallucinate, invent, or assume functions, classes, imports, callers, or architecture not supported by the workspace context.\n"
+            "2. If evidence is missing or cannot be verified from the source files, explicitly state that evidence was not found.\n"
+            "3. If inferring something, clearly prefix it with '[Inference]' or '[Likely]'.\n"
+            "4. Always include an 'Evidence' section citing the verified file paths and line ranges.\n"
+            "5. Structure the output clearly: Project Overview / Answer, Architecture / How it Works, Key Components, and Evidence."
+        )
+
+        user_content = f"### Grounded Workspace Context:\n{context}\n\n### User Question:\n{prompt}"
+
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ],
+            "temperature": 0.2,
+            "max_tokens": 2500,
+        }
+
+        import wia
+        headers = {
+            "Authorization": f"Bearer {self.api_key.strip()}",
+            "Content-Type": "application/json",
+            "User-Agent": f"WIA-Workspace-Intelligence-Agent/{wia.__version__}",
+        }
+
+        try:
+            req_data = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(self.endpoint, data=req_data, headers=headers, method="POST")
+
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                resp_data = json.loads(resp.read().decode("utf-8"))
+                choices = resp_data.get("choices", [])
+                if choices and "message" in choices[0]:
+                    return choices[0]["message"].get("content", "").strip()
+                return "Received empty response from NVIDIA NIM API."
+
+        except urllib.error.HTTPError as err:
+            err_msg = f"HTTP Error {err.code}: {err.reason}"
+            if err.code == 401:
+                return "Authentication Failed (401): The provided NVIDIA API key is invalid or expired. Check your NVIDIA_API_KEY."
+            elif err.code == 429:
+                return "Rate Limit Exceeded (429): NVIDIA NIM API rate limit reached. Please try again later."
+            return f"NVIDIA NIM API error ({err_msg}). Ensure endpoint '{self.endpoint}' and model '{self.model}' are reachable."
+        except urllib.error.URLError as err:
+            return f"Network Error: Unable to connect to NVIDIA NIM endpoint ({err.reason})."
+        except Exception as err:
+            return f"Reasoning execution error: {type(err).__name__} occurred while querying AI provider."
+
+
+NvidiaNIMProvider = NvidiaNimProvider
+
+
+class OpenAIProvider(AIProvider):
+    """Universal OpenAI-compatible API provider."""
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        model: str = "gpt-4o",
+    ):
+        self.api_key = api_key or os.environ.get("OPENAI_API_KEY") or ""
+        self.base_url = base_url or os.environ.get("OPENAI_BASE_URL") or "https://api.openai.com/v1"
+        self.model = model
+
+    def is_available(self) -> bool:
+        return bool(self.api_key and self.api_key.strip())
+
+    def generate(self, prompt: str, context: str, options: dict[str, Any] | None = None) -> str:
+        if not self.is_available():
+            return "OpenAI API key not configured. Set OPENAI_API_KEY environment variable."
         try:
             from openai import OpenAI
             client = OpenAI(api_key=self.api_key, base_url=self.base_url)
 
             system_prompt = (
-                "You are WIA (Workspace Intelligence Agent), an expert AI software architect and codebase reasoning assistant.\n"
-                "Your role is to answer questions, explain architecture, and trace logic grounded strictly in the provided codebase context.\n"
-                "Always cite exact file paths, declared symbols, and line numbers when referencing code facts."
+                "You are WIA (Workspace Intelligence Agent), an expert AI software architect.\n"
+                "Answer questions strictly grounded in the provided codebase context."
             )
-
             user_content = f"[GROUNDED WORKSPACE CONTEXT]\n{context}\n\n[USER QUESTION]\n{prompt}"
 
             response = client.chat.completions.create(
@@ -58,39 +177,26 @@ class OpenAICompatibleProvider(LLMProvider):
                 return content.strip() if content else ""
             return "No response generated by model."
         except Exception as err:
-            err_str = str(err)
-            if self.api_key and self.api_key in err_str:
-                err_str = err_str.replace(self.api_key, "[REDACTED_KEY]")
-            logger.warning(f"LLM API generation failed: {err_str}")
-            # Fallback to local offline intelligence if remote call fails
-            return MockLLMProvider().generate_response(prompt, context)
+            logger.warning(f"OpenAI API generation failed: {err}")
+            return LocalReasoningProvider().generate(prompt, context)
 
 
-class NvidiaNIMProvider(OpenAICompatibleProvider):
-    """NVIDIA NIM (NeMo Inference Microservices) Provider."""
-
-    def __init__(
-        self,
-        api_key: str,
-        base_url: Optional[str] = None,
-        model: Optional[str] = None,
-    ):
-        super().__init__(
-            api_key=api_key,
-            base_url=base_url or "https://integrate.api.nvidia.com/v1",
-            model=model or "meta/llama-3.1-70b-instruct",
-        )
+OpenAICompatibleProvider = OpenAIProvider
 
 
-class GeminiProvider(LLMProvider):
+class GeminiProvider(AIProvider):
     """Google Gemini AI reasoning provider."""
 
-    def __init__(self, api_key: str, model: Optional[str] = None):
-        self.api_key = api_key
-        self.model = model or "gemini-1.5-flash"
+    def __init__(self, api_key: str | None = None, model: str | None = None):
+        self.api_key = api_key or os.environ.get("GEMINI_API_KEY") or ""
+        self.model = model or os.environ.get("GEMINI_MODEL") or "gemini-1.5-flash"
 
-    def generate_response(self, prompt: str, context: str) -> str:
-        """Generate reasoning completion using Google Gemini API."""
+    def is_available(self) -> bool:
+        return bool(self.api_key and self.api_key.strip())
+
+    def generate(self, prompt: str, context: str, options: dict[str, Any] | None = None) -> str:
+        if not self.is_available():
+            return "Gemini API key not configured. Set GEMINI_API_KEY environment variable."
         try:
             import google.generativeai as genai
             genai.configure(api_key=self.api_key)
@@ -106,18 +212,22 @@ class GeminiProvider(LLMProvider):
             return resp.text.strip() if resp and resp.text else ""
         except Exception as err:
             logger.warning(f"Gemini generation failed: {err}")
-            return MockLLMProvider().generate_response(prompt, context)
+            return LocalReasoningProvider().generate(prompt, context)
 
 
-class AnthropicProvider(LLMProvider):
+class AnthropicProvider(AIProvider):
     """Anthropic Claude AI reasoning provider."""
 
-    def __init__(self, api_key: str, model: Optional[str] = None):
-        self.api_key = api_key
-        self.model = model or "claude-3-5-sonnet-20241022"
+    def __init__(self, api_key: str | None = None, model: str | None = None):
+        self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY") or ""
+        self.model = model or os.environ.get("ANTHROPIC_MODEL") or "claude-3-5-sonnet-20241022"
 
-    def generate_response(self, prompt: str, context: str) -> str:
-        """Generate reasoning completion using Anthropic API."""
+    def is_available(self) -> bool:
+        return bool(self.api_key and self.api_key.strip())
+
+    def generate(self, prompt: str, context: str, options: dict[str, Any] | None = None) -> str:
+        if not self.is_available():
+            return "Anthropic API key not configured. Set ANTHROPIC_API_KEY environment variable."
         try:
             import anthropic
             client = anthropic.Anthropic(api_key=self.api_key)
@@ -133,153 +243,90 @@ class AnthropicProvider(LLMProvider):
             return msg.content[0].text if msg and msg.content else ""
         except Exception as err:
             logger.warning(f"Anthropic generation failed: {err}")
-            return MockLLMProvider().generate_response(prompt, context)
+            return LocalReasoningProvider().generate(prompt, context)
 
 
-class MockLLMProvider(LLMProvider):
-    """Local offline intelligent reasoning provider that dynamically synthesizes grounded workspace context."""
+class LocalReasoningProvider(AIProvider):
+    """Deterministic local reasoning engine synthesizing grounded workspace evidence without external API dependencies."""
 
-    def generate_response(self, prompt: str, context: str) -> str:
-        """Synthesize a grounded answer using provided workspace context."""
-        if not context:
-            return "Insufficient workspace context available to answer the query."
-
-        p_lower = prompt.lower()
-
-        # 0. Target file / symbol specific context from LLMService
-        if "Target File:" in context:
-            lines = context.splitlines()
-            target_file = lines[0].replace("Target File: ", "").strip()
-            lang = lines[1].replace("Language: ", "").strip() if len(lines) > 1 else "Unknown"
-            size = lines[2].replace("File Size: ", "").strip() if len(lines) > 2 else "Unknown"
-            symbols_cnt = lines[3].replace("Declared Symbols Count: ", "").strip() if len(lines) > 3 else "0"
-
-            symbol_lines = []
-            imports_line = "Imports: None"
-            capturing_symbols = False
-            for line in lines[4:]:
-                if line.startswith("Symbol Breakdown:"):
-                    capturing_symbols = True
-                    continue
-                elif line.startswith("Imports ("):
-                    capturing_symbols = False
-                    imports_line = line
-                elif capturing_symbols:
-                    symbol_lines.append(line)
-
-            symbol_block = "\n".join(symbol_lines) if symbol_lines else "  * No top-level functions or classes declared."
-
-            return (
-                f"Detailed Explanation for File `{target_file}`:\n\n"
-                f"* **File Overview**: `{target_file}` ({lang}, {size})\n"
-                f"* **Total Symbols Declared**: {symbols_cnt}\n\n"
-                f"### Function & Symbol Breakdown (What each symbol does):\n"
-                f"{symbol_block}\n\n"
-                f"### Dependencies & Imports:\n"
-                f"* {imports_line}\n\n"
-                f"* **Capabilities Summary**: Evaluated via AST parsing, structural analysis, and active workspace index metadata."
-            )
-
-        # 1. Architecture / CLI structure queries
-        if any(
-            w in p_lower
-            for w in ("structured", "structure", "architecture", "design", "layers", "subsystem", "layout")
-        ):
+    def generate(self, prompt: str, context: str, options: dict[str, Any] | None = None) -> str:
+        """Synthesize a structured, grounded answer from provided workspace context."""
+        if not context or not context.strip():
             return (
                 "Answer:\n"
-                "The WIA CLI is centered around `wia/cli/app.py`, which registers and dispatches CLI subcommands defined under `wia/cli/commands/` (`index_cmd.py`, `status_cmd.py`, `files_cmd.py`, `info_cmd.py`, `analyze_cmd.py`, `architecture_cmd.py`, `search_cmd.py`, `impact_cmd.py`, `explain_cmd.py`, `summary_cmd.py`, `report_cmd.py`, `ask_cmd.py`). Command functions handle terminal argument parsing and Click presentation via `wia/cli/formatting.py`, delegating core application processing to service layer components (`IndexingService`, `StatusService`, `ExplanationService`).\n\n"
+                "Insufficient workspace context available to answer the query.\n\n"
                 "Evidence:\n"
-                "  * `wia/cli/app.py` (CLI entrypoint & command group registration)\n"
-                "  * `wia/cli/commands/` (Subcommand handlers)\n"
-                "  * `wia/cli/formatting.py` (Terminal presentation helpers)\n"
-                "  * `wia/services/` (Service orchestration layer)\n"
-                "  * Active WorkspaceIndex & WorkspaceGraph"
+                "  * No matching files or symbols were found in the active workspace index."
             )
 
-        # 2. Indexing pipeline / workflow queries
-        if any(
-            w in p_lower
-            for w in ("how does wia index", "pipeline", "process", "workflow", "indexing", "runs wia index", "steps")
-        ):
+        p_lower = prompt.lower().strip()
+
+        # Extract context lines for grounded synthesis
+        context_lines = [l.strip() for l in context.splitlines() if l.strip()]
+        tech_lines = [l for l in context_lines if l.startswith("- **") and ":" in l]
+        file_headers = [l.replace("### File: ", "").strip("`") for l in context_lines if l.startswith("### File: ")]
+
+        # 1. Project Overview & Architecture Queries
+        if any(w in p_lower for w in ("explain the project", "overview", "what does this project do", "architecture", "what is this repo")):
+            tech_summary = "\n".join(f"  * {t.lstrip('- ')}" for t in tech_lines[:8]) if tech_lines else "  * Python workspace components"
+            key_files = "\n".join(f"  * `{f}`" for f in file_headers[:8]) if file_headers else "  * Indexed workspace modules"
+
             return (
-                "Answer:\n"
-                "Indexing in WIA is an automated multi-step pipeline orchestrated by `IndexingService` (`wia/services/indexing_service.py`):\n\n"
-                "1. **Validation & Discovery**: `WorkspaceValidator` checks directory integrity, while `FileDiscovery` recursively scans files respecting `.gitignore` rules.\n"
-                "2. **Filtering & Hashing**: `FileFilter` checks binary/size limits and `FileHasher` computes SHA-256 content hashes to skip unchanged files.\n"
-                "3. **Language & Framework Detection**: `LanguageDetector` and `FrameworkDetector` identify programming languages and tech stacks (e.g. pytest).\n"
-                "4. **Specialized Analyzers**: `ASTParser` extracts AST symbols (classes, functions, methods, imports), `ManifestParser` & `ConflictDetector` parse package manifests, `GitAnalyzer` tracks hotspots, and `SecretScanner` scans for hardcoded credentials.\n"
-                "5. **Persistence**: The resulting `WorkspaceIndex` state is persisted to `.wia/index.json` and `.wia/workspace.db`.\n\n"
-                "Evidence:\n"
-                "  * `wia/services/indexing_service.py`\n"
-                "  * `wia/core/discovery.py` & `wia/core/filter.py`\n"
-                "  * `wia/analyzers/code/ast_parser.py` & `wia/analyzers/security/secret_scanner.py`\n"
-                "  * `wia/storage/repository.py`"
+                "Project Overview\n"
+                "----------------\n"
+                "This workspace is a software project analyzed through WIA's AST parsing and relationship graph.\n\n"
+                "Architecture & Core Subsystems\n"
+                "------------------------------\n"
+                "The repository organizes its capabilities across modular components evidenced in the source tree:\n"
+                f"{key_files}\n\n"
+                "Technology Stack\n"
+                "----------------\n"
+                f"{tech_summary}\n\n"
+                "Evidence\n"
+                "--------\n"
+                f"{key_files}"
             )
 
-        # 3. Component queries (dependency, security, git, AST)
-        if any(
-            w in p_lower
-            for w in ("component", "dependency", "security", "git", "handles", "analyzer", "parser")
-        ):
-            if "dependency" in p_lower or "manifest" in p_lower:
-                return (
-                    "Answer:\n"
-                    "Dependency analysis is implemented under `wia/analyzers/dependency/`:\n\n"
-                    "* **ManifestParser** (`wia/analyzers/dependency/manifest_parser.py`): Discovers and parses package manifest files across `pyproject.toml`, `requirements.txt`, `package.json`, `Cargo.toml`, and `go.mod`, normalizing package names and categorizing dependency types (`runtime`, `dev`, `optional`, `build`).\n"
-                    "* **ConflictDetector** (`wia/analyzers/dependency/conflict_detector.py`): Evaluates parsed dependencies across workspace manifests to detect version constraint mismatches (`version_mismatch`) and duplicate manifest entries (`duplicate_entry`).\n"
-                    "* **CLI Subcommand**: Exposed via `wia analyze deps` in `wia/cli/commands/analyze_cmd.py`.\n\n"
-                    "Evidence:\n"
-                    "  * `wia/analyzers/dependency/manifest_parser.py`\n"
-                    "  * `wia/analyzers/dependency/conflict_detector.py`\n"
-                    "  * `wia/cli/commands/analyze_cmd.py`"
-                )
-            elif "security" in p_lower or "secret" in p_lower or "credential" in p_lower:
-                return (
-                    "Answer:\n"
-                    "Security scanning is implemented under `wia/analyzers/security/secret_scanner.py`:\n\n"
-                    "* **SecretScanner**: Scans workspace source files for exposed AWS keys, RSA private keys, GitHub PATs, generic API tokens, and Slack webhooks.\n"
-                    "* **Evidence Classifier**: Differentiates real exposed secrets (`REAL_SECRET`) from synthetic test fixtures (`SYNTHETIC_TEST_FIXTURE`) and documentation examples (`DOCUMENTATION_EXAMPLE`).\n"
-                    "* **Secret Masking**: Enforces 100% masking of matched credential strings (`AKIA************MPLE`).\n\n"
-                    "Evidence:\n"
-                    "  * `wia/analyzers/security/secret_scanner.py`\n"
-                    "  * `wia/cli/commands/analyze_cmd.py`"
-                )
+        # 2. General Query Grounded Synthesis
+        top_files = "\n".join(f"  * `{f}`" for f in file_headers[:6]) if file_headers else "  * Active WorkspaceIndex & WorkspaceGraph"
 
-        # 4. Storage & Persistence queries
-        if any(
-            w in p_lower
-            for w in ("stored", "storage", "database", "sqlite", "persist", "where is", "saved", "index.json", "workspace.db")
-        ):
-            return (
-                "Answer:\n"
-                "The workspace index is persisted inside the `.wia/` directory at the root of the workspace:\n\n"
-                "* **`.wia/index.json`**: Primary JSON metadata file containing workspace statistics, language breakdowns, completed batch history, and file records persisted via `IndexRepository` (`wia/storage/repository.py`).\n"
-                "* **`.wia/workspace.db`**: Relational SQLite database storing indexed file records, extracted AST symbols, and graph edge tables managed by `SQLiteStore` (`wia/storage/sqlite_store.py`).\n"
-                "* **`.wia/report_data.json`**: Sidecar JSON data payload generated by `ReportGenerator` for HTML report rendering.\n\n"
-                "Evidence:\n"
-                "  * `wia/storage/repository.py`\n"
-                "  * `wia/storage/sqlite_store.py`\n"
-                "  * `wia/core/index_model.py`"
-            )
-
-        # 5. Specific target file/symbol queries
-        if p_lower.startswith("explain ") or p_lower.startswith("what does "):
-            target_name = prompt.split()[-1].strip("?\"'")
-            if target_name and target_name not in ["wia", "the", "project", "codebase"]:
-                return (
-                    f"Answer:\n"
-                    f"Target entity `{target_name}` is a component defined within the WIA workspace. "
-                    f"Static inspection extracts declared symbols, AST relationships, and downstream callers.\n\n"
-                    f"Evidence:\n"
-                    f"  * `WorkspaceIndex` file & symbol table\n"
-                    f"  * `WorkspaceGraph` relationship edges"
-                )
-
-        # 6. Fallback contextual synthesis
         return (
-            f"Answer:\n"
-            f"WIA Workspace Intelligence Analysis for query '{prompt}':\n\n"
-            f"{context[:400]}\n...\n\n"
-            f"Evidence:\n"
-            f"  * Grounded in active WorkspaceIndex & WorkspaceGraph"
+            f"Answer\n"
+            f"------\n"
+            f"Analysis for query '{prompt}':\n\n"
+            f"Relevant Components & Context\n"
+            f"-----------------------------\n"
+            f"{top_files}\n\n"
+            f"Evidence\n"
+            f"--------\n"
+            f"{top_files}"
         )
+
+
+# Backward compatibility aliases
+LLMProvider = AIProvider
+MockLLMProvider = LocalReasoningProvider
+
+
+class AIProviderFactory:
+    """Factory creating configured AI providers."""
+
+    @classmethod
+    def get_provider(
+        cls,
+        provider_name: str | None = None,
+        config: WorkspaceConfig | None = None,
+    ) -> AIProvider:
+        """Create and return the active AI provider based on environment and config."""
+        p_name = (provider_name or os.environ.get("WIA_AI_PROVIDER") or os.environ.get("WIA_LLM_PROVIDER") or "").lower().strip()
+
+        if p_name in ("nvidia", "nvidia_nim", "nim") or (not p_name and (os.environ.get("NVIDIA_API_KEY") or os.environ.get("NVIDIA_NIM_API_KEY"))):
+            return NvidiaNimProvider()
+        elif p_name == "openai" or (not p_name and os.environ.get("OPENAI_API_KEY")):
+            return OpenAIProvider()
+        elif p_name == "gemini" or (not p_name and os.environ.get("GEMINI_API_KEY")):
+            return GeminiProvider()
+        elif p_name == "anthropic" or (not p_name and os.environ.get("ANTHROPIC_API_KEY")):
+            return AnthropicProvider()
+        else:
+            return LocalReasoningProvider()

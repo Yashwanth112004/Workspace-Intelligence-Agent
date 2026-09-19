@@ -1,7 +1,7 @@
 {
   "name": "wia-vscode",
   "displayName": "Workspace Intelligence Agent (WIA)",
-  "description": "AI-Powered Code Intelligence, Architecture Map, and AST Symbol Explorer for VS Code",
+  "description": "AI-Powered Code Intelligence, Architecture Map, Symbol Impact CodeLens, and AST Explorer for VS Code",
   "version": "0.1.1",
   "publisher": "wia-agent",
   "engines": {
@@ -12,7 +12,24 @@
     "Other",
     "Machine Learning"
   ],
+  "keywords": [
+    "code intelligence",
+    "architecture",
+    "codelens",
+    "refactoring",
+    "impact analysis",
+    "ast",
+    "agent"
+  ],
   "main": "./out/extension.js",
+  "icon": "resources/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Yashwanth112004/Workspace-Intelligence-Agent.git"
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "contributes": {
     "viewsContainers": {
       "activitybar": [
@@ -42,57 +59,114 @@
     "commands": [
       {
         "command": "wia.scanWorkspace",
-        "title": "WIA: Scan & Ingest Workspace"
+        "title": "WIA: Scan & Ingest Workspace",
+        "category": "WIA"
       },
       {
         "command": "wia.openChat",
-        "title": "WIA: Open AI Chat Assistant"
+        "title": "WIA: Open AI Chat Assistant",
+        "category": "WIA"
       },
       {
         "command": "wia.explainArchitecture",
-        "title": "WIA: Explain Code Architecture"
+        "title": "WIA: Explain Code Architecture",
+        "category": "WIA"
+      },
+      {
+        "command": "wia.showArchitecturePanel",
+        "title": "WIA: Open Visual Architecture Map",
+        "category": "WIA"
       },
       {
         "command": "wia.traceFlow",
-        "title": "WIA: Trace Code Execution Flow"
+        "title": "WIA: Trace Code Execution Flow",
+        "category": "WIA"
       },
       {
         "command": "wia.analyzeImpact",
-        "title": "WIA: Analyze Change Impact"
+        "title": "WIA: Analyze Change Impact",
+        "category": "WIA"
+      },
+      {
+        "command": "wia.showImpactPanel",
+        "title": "WIA: Open Change Impact Inspector",
+        "category": "WIA"
       },
       {
         "command": "wia.exportOkf",
-        "title": "WIA: Export Open Knowledge Format (.wia/knowledge/)"
+        "title": "WIA: Export Open Knowledge Format (.wia/knowledge/)",
+        "category": "WIA"
       },
       {
         "command": "wia.startDaemon",
-        "title": "WIA: Start Local Intelligence Daemon"
+        "title": "WIA: Start Local Intelligence Daemon",
+        "category": "WIA"
+      },
+      {
+        "command": "wia.refreshViews",
+        "title": "WIA: Refresh Knowledge Views",
+        "category": "WIA",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "wia.checkHealthStatus",
+        "title": "WIA: Check Daemon Health Status",
+        "category": "WIA"
       }
     ],
     "menus": {
       "editor/context": [
         {
-          "command": "wia.explainArchitecture",
+          "command": "wia.showImpactPanel",
           "group": "wia@1"
         },
         {
-          "command": "wia.traceFlow",
+          "command": "wia.explainArchitecture",
           "group": "wia@2"
         },
         {
-          "command": "wia.analyzeImpact",
+          "command": "wia.traceFlow",
           "group": "wia@3"
         }
+      ],
+      "view/title": [
+        {
+          "command": "wia.refreshViews",
+          "when": "view == wia-architecture || view == wia-symbols || view == wia-dependencies",
+          "group": "navigation"
+        },
+        {
+          "command": "wia.scanWorkspace",
+          "when": "view == wia-architecture",
+          "group": "navigation"
+        }
       ]
+    },
+    "configuration": {
+      "title": "Workspace Intelligence Agent",
+      "properties": {
+        "wia.apiBaseUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:8000",
+          "description": "Base URL of the local WIA Engine Daemon API"
+        },
+        "wia.enableCodeLens": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable in-editor WIA CodeLens showing symbol impact, caller counts, and execution trace flow"
+        }
+      }
     }
   },
   "scripts": {
     "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./"
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package --no-dependencies"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.80.0",
+    "@vscode/vsce": "^2.24.0",
     "typescript": "^5.3.0"
   }
 }

@@ -15,23 +15,38 @@ class FrameworkEvidence:
 
 
 class FrameworkDetector:
-    """Scans repository manifests and config files to detect frameworks and tools."""
+    """Scans repository manifests, workflows, and config files to detect tech stacks."""
 
     @classmethod
     def detect_frameworks(cls, workspace_path: str | Path) -> list[FrameworkEvidence]:
-        """Detect frameworks and development tools present in workspace."""
+        """Detect frameworks, libraries, build tools, testing suites, and DevOps configurations."""
         root = Path(workspace_path).resolve()
         evidence_list: list[FrameworkEvidence] = []
 
         if not root.exists() or not root.is_dir():
             return evidence_list
 
-        # 1. Node.js & JavaScript/TypeScript Ecosystem (package.json)
+        # 1. CI / CD Workflows
+        gh_workflows = root / ".github" / "workflows"
+        if gh_workflows.exists() and any(gh_workflows.glob("*.yml")) or any(gh_workflows.glob("*.yaml")):
+            evidence_list.append(
+                FrameworkEvidence(name="GitHub Actions", category="CI/CD", evidence_source=".github/workflows")
+            )
+        if (root / ".gitlab-ci.yml").exists():
+            evidence_list.append(
+                FrameworkEvidence(name="GitLab CI", category="CI/CD", evidence_source=".gitlab-ci.yml")
+            )
+        if (root / "Jenkinsfile").exists():
+            evidence_list.append(
+                FrameworkEvidence(name="Jenkins", category="CI/CD", evidence_source="Jenkinsfile")
+            )
+
+        # 2. Node.js & JavaScript/TypeScript Ecosystem
         package_json = root / "package.json"
         if package_json.exists() and package_json.is_file():
             cls._inspect_package_json(package_json, evidence_list)
 
-        # 2. Python Ecosystem (pyproject.toml & requirements.txt)
+        # 3. Python Ecosystem
         pyproject_toml = root / "pyproject.toml"
         if pyproject_toml.exists() and pyproject_toml.is_file():
             cls._inspect_pyproject_toml(pyproject_toml, evidence_list)
@@ -40,13 +55,28 @@ class FrameworkDetector:
         if requirements_txt.exists() and requirements_txt.is_file():
             cls._inspect_requirements_txt(requirements_txt, evidence_list)
 
-        # 3. Docker & Infrastructure (Dockerfile, docker-compose.yml, *.tf)
-        if (root / "Dockerfile").exists() or (root / "docker-compose.yml").exists() or (root / "docker-compose.yaml").exists():
+        # 4. Rust Ecosystem
+        cargo_toml = root / "Cargo.toml"
+        if cargo_toml.exists() and cargo_toml.is_file():
+            evidence_list.append(
+                FrameworkEvidence(name="Cargo", category="Build Tools", evidence_source="Cargo.toml")
+            )
+
+        # 5. Docker & Infrastructure
+        if (root / "Dockerfile").exists() or list(root.glob("Dockerfile.*")):
             evidence_list.append(
                 FrameworkEvidence(
                     name="Docker",
-                    category="Containerization / DevOps",
-                    evidence_source="Dockerfile or docker-compose file",
+                    category="Containerization",
+                    evidence_source="Dockerfile",
+                )
+            )
+        if (root / "docker-compose.yml").exists() or (root / "docker-compose.yaml").exists():
+            evidence_list.append(
+                FrameworkEvidence(
+                    name="Docker Compose",
+                    category="Containerization",
+                    evidence_source="docker-compose.yml",
                 )
             )
 
@@ -65,7 +95,7 @@ class FrameworkDetector:
             if ev.name not in unique_map:
                 unique_map[ev.name] = ev
 
-        return sorted(unique_map.values(), key=lambda e: e.name)
+        return sorted(unique_map.values(), key=lambda e: (e.category, e.name))
 
     @staticmethod
     def _inspect_package_json(
@@ -83,31 +113,35 @@ class FrameworkDetector:
             evidence_list.append(
                 FrameworkEvidence(
                     name="Node.js",
-                    category="Runtime",
+                    category="Package Managers",
                     evidence_source="package.json",
                 )
             )
 
-            if "next" in deps:
-                evidence_list.append(
-                    FrameworkEvidence(name="Next.js", category="Full-stack Web Framework", evidence_source="package.json dependency: 'next'")
-                )
-            if "react" in deps:
-                evidence_list.append(
-                    FrameworkEvidence(name="React", category="Frontend UI Framework", evidence_source="package.json dependency: 'react'")
-                )
-            if "vue" in deps:
-                evidence_list.append(
-                    FrameworkEvidence(name="Vue.js", category="Frontend UI Framework", evidence_source="package.json dependency: 'vue'")
-                )
-            if "@angular/core" in deps:
-                evidence_list.append(
-                    FrameworkEvidence(name="Angular", category="Frontend Web Framework", evidence_source="package.json dependency: '@angular/core'")
-                )
-            if "express" in deps:
-                evidence_list.append(
-                    FrameworkEvidence(name="Express", category="Backend Web Framework", evidence_source="package.json dependency: 'express'")
-                )
+            framework_map = {
+                "next": ("Next.js", "Frontend Frameworks"),
+                "react": ("React", "Frontend Frameworks"),
+                "vue": ("Vue.js", "Frontend Frameworks"),
+                "nuxt": ("Nuxt", "Frontend Frameworks"),
+                "svelte": ("Svelte", "Frontend Frameworks"),
+                "@angular/core": ("Angular", "Frontend Frameworks"),
+                "express": ("Express", "Frameworks"),
+                "nestjs": ("NestJS", "Frameworks"),
+                "tailwindcss": ("Tailwind CSS", "Libraries"),
+                "jest": ("Jest", "Testing Tools"),
+                "vitest": ("Vitest", "Testing Tools"),
+                "playwright": ("Playwright", "Testing Tools"),
+                "cypress": ("Cypress", "Testing Tools"),
+                "typescript": ("TypeScript", "Build Tools"),
+                "vite": ("Vite", "Build Tools"),
+                "webpack": ("Webpack", "Build Tools"),
+            }
+
+            for dep_name, (fw_name, category) in framework_map.items():
+                if dep_name in deps:
+                    evidence_list.append(
+                        FrameworkEvidence(name=fw_name, category=category, evidence_source=f"package.json dependency: '{dep_name}'")
+                    )
         except Exception:
             pass
 
@@ -115,25 +149,32 @@ class FrameworkDetector:
     def _inspect_pyproject_toml(
         pyproject_path: Path, evidence_list: list[FrameworkEvidence]
     ) -> None:
-        """Inspect pyproject.toml for Python web frameworks."""
+        """Inspect pyproject.toml for Python frameworks and build tools."""
         try:
             content = pyproject_path.read_text(encoding="utf-8").lower()
-            if "fastapi" in content:
-                evidence_list.append(
-                    FrameworkEvidence(name="FastAPI", category="Backend Web Framework", evidence_source="pyproject.toml dependency: 'fastapi'")
-                )
-            if "django" in content:
-                evidence_list.append(
-                    FrameworkEvidence(name="Django", category="Backend Web Framework", evidence_source="pyproject.toml dependency: 'django'")
-                )
-            if "flask" in content:
-                evidence_list.append(
-                    FrameworkEvidence(name="Flask", category="Backend Web Framework", evidence_source="pyproject.toml dependency: 'flask'")
-                )
-            if "pytest" in content:
-                evidence_list.append(
-                    FrameworkEvidence(name="pytest", category="Testing Framework", evidence_source="pyproject.toml dependency: 'pytest'")
-                )
+            checks = {
+                "hatchling": ("Hatch", "Build Tools"),
+                "poetry": ("Poetry", "Build Tools"),
+                "flit": ("Flit", "Build Tools"),
+                "setuptools": ("Setuptools", "Build Tools"),
+                "fastapi": ("FastAPI", "Frameworks"),
+                "django": ("Django", "Frameworks"),
+                "flask": ("Flask", "Frameworks"),
+                "starlette": ("Starlette", "Frameworks"),
+                "pytest": ("pytest", "Testing Tools"),
+                "tree-sitter": ("Tree-sitter", "Libraries"),
+                "torch": ("PyTorch", "Libraries"),
+                "tensorflow": ("TensorFlow", "Libraries"),
+                "scikit-learn": ("Scikit-learn", "Libraries"),
+                "pandas": ("Pandas", "Libraries"),
+                "numpy": ("NumPy", "Libraries"),
+                "openai": ("OpenAI SDK", "Libraries"),
+            }
+            for key, (fw_name, category) in checks.items():
+                if key in content:
+                    evidence_list.append(
+                        FrameworkEvidence(name=fw_name, category=category, evidence_source=f"pyproject.toml: '{key}'")
+                    )
         except Exception:
             pass
 
@@ -144,17 +185,20 @@ class FrameworkDetector:
         """Inspect requirements.txt for Python frameworks."""
         try:
             content = req_path.read_text(encoding="utf-8").lower()
-            if "fastapi" in content:
-                evidence_list.append(
-                    FrameworkEvidence(name="FastAPI", category="Backend Web Framework", evidence_source="requirements.txt")
-                )
-            if "django" in content:
-                evidence_list.append(
-                    FrameworkEvidence(name="Django", category="Backend Web Framework", evidence_source="requirements.txt")
-                )
-            if "flask" in content:
-                evidence_list.append(
-                    FrameworkEvidence(name="Flask", category="Backend Web Framework", evidence_source="requirements.txt")
-                )
+            checks = {
+                "fastapi": ("FastAPI", "Frameworks"),
+                "django": ("Django", "Frameworks"),
+                "flask": ("Flask", "Frameworks"),
+                "pytest": ("pytest", "Testing Tools"),
+                "torch": ("PyTorch", "Libraries"),
+                "tensorflow": ("TensorFlow", "Libraries"),
+                "pandas": ("Pandas", "Libraries"),
+                "numpy": ("NumPy", "Libraries"),
+            }
+            for key, (fw_name, category) in checks.items():
+                if key in content:
+                    evidence_list.append(
+                        FrameworkEvidence(name=fw_name, category=category, evidence_source=f"requirements.txt: '{key}'")
+                    )
         except Exception:
             pass

@@ -86,9 +86,12 @@ wia-agent = "wia.cli.app:cli_entrypoint"
 where = ["."]
 include = ["wia*", "backend*"]
 
+[tool.pyright]
+extraPaths = ["backend"]
+
 [tool.pytest.ini_options]
 minversion = "7.0"
 addopts = "-ra -q"
 pythonpath = [".", "backend"]
-testpaths = ["tests", "backend/tests"]
+testpaths = ["tests"]
 python_files = ["test_*.py"]

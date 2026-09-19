@@ -55,6 +55,7 @@ EXTENSION_MAP: dict[str, str] = {
     ".ex": "Elixir",
     ".exs": "Elixir",
     ".scala": "Scala",
+    ".ipynb": "Jupyter Notebook",
 }
 
 # Filename to language map
@@ -70,8 +71,27 @@ FILENAME_MAP: dict[str, str] = {
 }
 
 
+class FileType:
+    """Standardized classification categories for workspace files."""
+
+    SOURCE_CODE = "Source Code"
+    NOTEBOOK = "Notebook"
+    CONFIGURATION = "Configuration"
+    DOCUMENTATION = "Documentation"
+    TEST = "Test"
+    BUILD = "Build"
+    CI_CD = "CI/CD"
+    DATA = "Data"
+    GENERATED = "Generated"
+    ASSET = "Asset"
+    DEPENDENCY_LOCK = "Dependency Lock"
+    SCRIPT = "Script"
+    BINARY = "Binary"
+    UNSUPPORTED = "Unsupported"
+
+
 class LanguageDetector:
-    """Multi-evidence programming language detection engine."""
+    """Multi-evidence programming language detection and file classification engine."""
 
     @classmethod
     def detect_language(cls, file_path: str | Path) -> str:
@@ -102,6 +122,116 @@ class LanguageDetector:
 
         return "Unknown"
 
+    @classmethod
+    def detect_file_type(cls, file_path: str | Path) -> str:
+        """Classify file into functional categories (Source, Notebook, Test, CI/CD, Build, etc.)."""
+        path = Path(file_path)
+        rel_str = str(file_path).replace("\\", "/").lower()
+        filename_lower = path.name.lower()
+        ext_lower = path.suffix.lower()
+        parts = [p.lower() for p in path.parts]
+
+        # 1. Notebooks
+        if ext_lower == ".ipynb":
+            return FileType.NOTEBOOK
+
+        # 2. CI / CD Workflows
+        if ".github/workflows" in rel_str or ".gitlab-ci" in filename_lower or "jenkinsfile" in filename_lower or ".circleci" in rel_str:
+            return FileType.CI_CD
+
+        # 3. Dependency Locks
+        if filename_lower in (
+            "package-lock.json",
+            "yarn.lock",
+            "pnpm-lock.yaml",
+            "poetry.lock",
+            "uv.lock",
+            "cargo.lock",
+            "gemfile.lock",
+            "composer.lock",
+            "pipfile.lock",
+        ) or ext_lower == ".lock":
+            return FileType.DEPENDENCY_LOCK
+
+        # 4. Tests
+        if (
+            filename_lower.startswith("test_")
+            or filename_lower.endswith("_test.py")
+            or ".test." in filename_lower
+            or ".spec." in filename_lower
+            or any(part in ("tests", "test", "__tests__", "spec", "specs") for part in parts[:-1])
+        ):
+            return FileType.TEST
+
+        # 5. Build & Packaging Manifests
+        if filename_lower in (
+            "pyproject.toml",
+            "requirements.txt",
+            "requirements-dev.txt",
+            "setup.py",
+            "setup.cfg",
+            "package.json",
+            "cargo.toml",
+            "go.mod",
+            "go.sum",
+            "pom.xml",
+            "build.gradle",
+            "makefile",
+            "cmakelists.txt",
+            "gemfile",
+        ) or filename_lower.startswith("dockerfile") or filename_lower.startswith("containerfile"):
+            return FileType.BUILD
+
+        # 6. Documentation
+        if ext_lower in (".md", ".markdown", ".rst", ".adoc") or (
+            ext_lower == ".txt" and any(k in filename_lower for k in ("readme", "license", "notice", "contributing", "changelog", "authors"))
+        ) or any(part in ("docs", "doc", "documentation") for part in parts[:-1]):
+            return FileType.DOCUMENTATION
+
+        # 7. Configuration
+        if filename_lower in (
+            ".env",
+            ".env.example",
+            ".gitignore",
+            ".dockerignore",
+            ".editorconfig",
+            ".eslintrc",
+            ".prettierrc",
+            "tsconfig.json",
+            "vite.config.js",
+            "vite.config.ts",
+            "webpack.config.js",
+            "docker-compose.yml",
+            "docker-compose.yaml",
+        ) or ext_lower in (".toml", ".ini", ".cfg", ".conf") or (
+            ext_lower in (".yaml", ".yml", ".json") and not any(part in ("src", "lib", "app") for part in parts)
+        ):
+            return FileType.CONFIGURATION
+
+        # 8. Scripts
+        if ext_lower in (".sh", ".bash", ".zsh", ".ps1", ".bat", ".cmd") or any(
+            part in ("scripts", "bin", "tools") for part in parts[:-1]
+        ):
+            return FileType.SCRIPT
+
+        # 9. Data files
+        if ext_lower in (".csv", ".tsv", ".parquet", ".jsonl", ".sqlite", ".sqlite3", ".db", ".sql"):
+            return FileType.DATA
+
+        # 10. Assets / Media
+        if ext_lower in (
+            ".png", ".jpg", ".jpeg", ".gif", ".ico", ".webp", ".svg",
+            ".woff", ".woff2", ".ttf", ".eot", ".mp3", ".mp4", ".wav",
+        ):
+            return FileType.ASSET
+
+        # 11. Source Code for recognized programming languages
+        lang = cls.detect_language(file_path)
+        if lang != "Unknown":
+            return FileType.SOURCE_CODE
+
+        return FileType.UNSUPPORTED
+
     @staticmethod
     def _detect_shebang(first_line: str) -> str | None:
         """Parse shebang line for interpreter hints."""
@@ -121,3 +251,4 @@ class LanguageDetector:
             return "PHP"
 
         return None
+
