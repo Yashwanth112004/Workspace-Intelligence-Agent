@@ -58,12 +58,21 @@ Common Commands:
     message="%(prog)s version %(version)s",
 )
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose diagnostic output.")
+@click.option(
+    "--summary",
+    is_flag=True,
+    help="Generate workspace intelligence summary (alias for 'wia summary').",
+)
 @click.pass_context
-def main(ctx: click.Context, verbose: bool) -> None:
+def main(ctx: click.Context, verbose: bool, summary: bool = False) -> None:
     """WIA CLI root entrypoint."""
     ctx.ensure_object(dict)
     ctx.obj["verbose"] = verbose
     ctx.obj["logger"] = setup_logger(verbose=verbose)
+
+    if summary:
+        ctx.invoke(summary_cmd)
+        return
 
     if ctx.invoked_subcommand is None:
         click.echo(f"WIA — Workspace Intelligence Agent (v{wia.__version__})")

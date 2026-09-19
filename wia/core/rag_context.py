@@ -122,7 +122,8 @@ class RAGContextGenerator:
         active_components = [c for c in arch.components if c.file_count > 0]
         if active_components:
             for c in active_components:
-                lines.append(f"- **{c.name}** ({c.file_count} files): {c.description}")
+                desc = getattr(c, "description", None) or getattr(c, "responsibility", "") or getattr(c, "role", "")
+                lines.append(f"- **{c.name}** ({c.file_count} files): {desc}")
         else:
             lines.append("- Unified codebase structure")
         lines.append("")

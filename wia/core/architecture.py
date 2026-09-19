@@ -20,9 +20,16 @@ class ComponentInfo:
     internal_dependencies: list[str]
     internal_dependents: list[str]
 
+    @property
+    def description(self) -> str:
+        """Alias returning component responsibility or role."""
+        return self.responsibility or self.role or ""
+
     def to_dict(self) -> dict:
         """Convert component info to serializable dictionary."""
-        return asdict(self)
+        data = asdict(self)
+        data["description"] = self.description
+        return data
 
 
 @dataclass
