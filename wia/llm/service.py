@@ -1,15 +1,126 @@
 """LLM reasoning service connecting retrieval context to providers."""
 
+import os
+from pathlib import Path
+from typing import Optional
 from wia.core.index_model import WorkspaceIndex
 from wia.core.rag_context import RAGContextGenerator
-from wia.llm.base import LLMProvider, MockLLMProvider
+from wia.llm.base import (
+    LLMProvider,
+    MockLLMProvider,
+    NvidiaNIMProvider,
+    OpenAICompatibleProvider,
+    GeminiProvider,
+    AnthropicProvider,
+)
+
+
+def _load_env_file():
+    """Lightweight loader for .env file in workspace root."""
+    env_path = Path.cwd() / ".env"
+    if env_path.exists():
+        try:
+            with open(env_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        k = k.strip()
+                        v = v.strip().strip('"').strip("'")
+                        if k not in os.environ:
+                            os.environ[k] = v
+        except Exception:
+            pass
 
 
 class LLMService:
     """Orchestrates RAG context assembly and LLM provider queries."""
 
-    def __init__(self, provider: LLMProvider | None = None):
-        self.provider = provider or MockLLMProvider()
+    def __init__(
+        self,
+        provider: LLMProvider | None = None,
+        api_key: Optional[str] = None,
+        provider_name: Optional[str] = None,
+        model: Optional[str] = None,
+        offline: bool = False,
+    ):
+        if provider:
+            self.provider = provider
+        elif offline:
+            self.provider = MockLLMProvider()
+        else:
+            self.provider = self.create_provider(
+                api_key=api_key,
+                provider_name=provider_name,
+                model=model,
+            )
+
+    @classmethod
+    def create_provider(
+        cls,
+        api_key: Optional[str] = None,
+        provider_name: Optional[str] = None,
+        model: Optional[str] = None,
+        base_url: Optional[str] = None,
+    ) -> LLMProvider:
+        """Construct best available LLM provider based on keys and configuration."""
+        _load_env_file()
+
+        p_name = (provider_name or os.getenv("WIA_LLM_PROVIDER") or "").lower()
+
+        # 1. NVIDIA NIM (Default primary)
+        nim_key = api_key if p_name in ("nvidia", "nim") else (api_key or os.getenv("NVIDIA_NIM_API_KEY") or os.getenv("NVIDIA_API_KEY"))
+        if (p_name in ("nvidia", "nim") or not p_name) and nim_key:
+            return NvidiaNIMProvider(
+                api_key=nim_key,
+                base_url=base_url or os.getenv("NVIDIA_NIM_BASE_URL"),
+                model=model or os.getenv("NVIDIA_NIM_MODEL") or "meta/llama-3.1-70b-instruct",
+            )
+
+        # 2. OpenAI
+        openai_key = api_key if p_name == "openai" else (api_key or os.getenv("OPENAI_API_KEY"))
+        if (p_name == "openai" or not p_name) and openai_key:
+            return OpenAICompatibleProvider(
+                api_key=openai_key,
+                base_url=base_url or os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1",
+                model=model or os.getenv("OPENAI_MODEL") or "gpt-4o-mini",
+            )
+
+        # 3. Google Gemini
+        gemini_key = api_key if p_name == "gemini" else (api_key or os.getenv("GEMINI_API_KEY"))
+        if (p_name == "gemini" or not p_name) and gemini_key:
+            return GeminiProvider(
+                api_key=gemini_key,
+                model=model or os.getenv("GEMINI_MODEL") or "gemini-1.5-flash",
+            )
+
+        # 4. Anthropic
+        anthropic_key = api_key if p_name == "anthropic" else (api_key or os.getenv("ANTHROPIC_API_KEY"))
+        if (p_name == "anthropic" or not p_name) and anthropic_key:
+            return AnthropicProvider(
+                api_key=anthropic_key,
+                model=model or os.getenv("ANTHROPIC_MODEL") or "claude-3-5-sonnet-20241022",
+            )
+
+        # 5. Groq / OpenRouter / Custom OpenAI-compatible
+        groq_key = os.getenv("GROQ_API_KEY")
+        if groq_key:
+            return OpenAICompatibleProvider(
+                api_key=groq_key,
+                base_url="https://api.groq.com/openai/v1",
+                model=model or "llama-3.3-70b-versatile",
+            )
+
+        openrouter_key = os.getenv("OPENROUTER_API_KEY")
+        if openrouter_key:
+            return OpenAICompatibleProvider(
+                api_key=openrouter_key,
+                base_url="https://openrouter.ai/api/v1",
+                model=model or "meta-llama/llama-3.3-70b-instruct",
+            )
+
+        # Fallback to local offline intelligence
+        return MockLLMProvider()
 
     def ask_question(self, question: str, index: WorkspaceIndex) -> str:
         """Answer a question about the workspace using grounded context."""

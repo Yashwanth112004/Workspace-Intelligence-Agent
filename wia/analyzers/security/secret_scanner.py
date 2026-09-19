@@ -159,39 +159,54 @@ class SecretScanner:
 
     @classmethod
     def scan_workspace(
-        cls, workspace_path: str | Path, max_file_size_bytes: int = 2 * 1024 * 1024
+        cls, workspace_path: str | Path, max_file_size_bytes: int = 2 * 1024 * 1024, files: list[Path] | None = None
     ) -> list[SecurityFinding]:
-        """Discover and scan readable text files in workspace for security findings."""
+        """Discover and scan readable text files in workspace for security findings concurrently."""
+        from concurrent.futures import ThreadPoolExecutor
+        import os
         path = Path(workspace_path)
         findings: list[SecurityFinding] = []
 
-        ignored_parts = {
-            ".wia",
-            ".git",
-            "node_modules",
-            "venv",
-            ".venv",
-            ".pytest_cache",
-            "__pycache__",
-            "build",
-            "dist",
-            "wia-report.html",
-        }
+        if files is not None:
+            candidate_files = files
+        else:
+            ignored_parts = {
+                ".wia",
+                ".git",
+                "node_modules",
+                "venv",
+                ".venv",
+                ".pytest_cache",
+                "__pycache__",
+                "build",
+                "dist",
+                "wia-report.html",
+            }
+            candidate_files = []
+            for p in path.rglob("*"):
+                if not p.is_file():
+                    continue
+                if any(
+                    part in ignored_parts
+                    or part.endswith(".egg-info")
+                    or part.endswith(".dist-info")
+                    for part in p.parts
+                ):
+                    continue
+                try:
+                    if p.stat().st_size > max_file_size_bytes:
+                        continue
+                except OSError:
+                    continue
+                candidate_files.append(p)
 
-        for p in path.rglob("*"):
-            if not p.is_file():
-                continue
-            if any(
-                part in ignored_parts
-                or part.endswith(".egg-info")
-                or part.endswith(".dist-info")
-                for part in p.parts
-            ):
-                continue
-            if p.stat().st_size > max_file_size_bytes:
-                continue
+        if not candidate_files:
+            return []
 
-            rel_p = str(p.relative_to(path)).replace("\\", "/")
-            findings.extend(cls.scan_file(p))
+        max_workers = min(32, (os.cpu_count() or 4) * 4)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            results = executor.map(cls.scan_file, candidate_files)
+            for file_findings in results:
+                findings.extend(file_findings)
 
         return findings

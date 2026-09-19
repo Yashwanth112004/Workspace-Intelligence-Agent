@@ -1,4 +1,6 @@
+import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from wia.analyzers.code.ast_parser import ASTParser
@@ -9,7 +11,7 @@ from wia.analyzers.security.secret_scanner import SecretScanner
 from wia.core.batch_planner import BatchPlanner
 from wia.core.change_detector import ChangeDetector
 from wia.core.config import WorkspaceConfig
-from wia.core.discovery import FileDiscovery
+from wia.core.discovery import DiscoveredFile, FileDiscovery
 from wia.core.filter import FileFilter
 from wia.core.framework import FrameworkDetector
 from wia.core.gitignore import GitignoreProcessor
@@ -23,8 +25,66 @@ from wia.services.explanation_service import ExplanationService
 from wia.storage.repository import IndexRepository
 
 
+def _process_single_file(
+    file: DiscoveredFile,
+    file_filter: FileFilter,
+    previous_records: dict[str, FileRecord],
+    hash_algorithm: str,
+    batch_id: str,
+) -> tuple[str, FileRecord, bool]:
+    """Process a single candidate file: filter, hash, parse AST, and detect language."""
+    filter_res = file_filter.evaluate(file)
+    if not filter_res.should_index:
+        rec = FileRecord(
+            relative_path=file.relative_path,
+            file_size=file.file_size,
+            modified_time=file.modified_time,
+            extension=Path(file.relative_path).suffix,
+            indexing_status=IndexingStatus.IGNORED,
+            exclusion_reason=filter_res.reason,
+            extra_metadata={"batch_id": batch_id},
+        )
+        return file.relative_path, rec, False
+
+    prev_rec = previous_records.get(file.relative_path) if previous_records else None
+    extra_meta = prev_rec.extra_metadata.copy() if prev_rec else {}
+    extra_meta["batch_id"] = batch_id
+
+    if (
+        prev_rec
+        and prev_rec.indexing_status == IndexingStatus.INDEXED
+        and prev_rec.modified_time == file.modified_time
+        and prev_rec.file_size == file.file_size
+        and "symbols" in prev_rec.extra_metadata
+    ):
+        content_hash = prev_rec.content_hash
+    else:
+        content_hash = FileHasher.hash_file(
+            file.absolute_path, algorithm=hash_algorithm
+        )
+        symbols = ASTParser.parse_file(file.absolute_path)
+        extra_meta["symbols"] = [s.to_dict() for s in symbols]
+        extra_meta["imports"] = [
+            s.name for s in symbols if s.symbol_type == "import"
+        ]
+
+    language = LanguageDetector.detect_language(file.absolute_path)
+
+    rec = FileRecord(
+        relative_path=file.relative_path,
+        file_size=file.file_size,
+        modified_time=file.modified_time,
+        extension=Path(file.relative_path).suffix,
+        content_hash=content_hash,
+        language=language,
+        indexing_status=IndexingStatus.INDEXED,
+        extra_metadata=extra_meta,
+    )
+    return file.relative_path, rec, True
+
+
 class IndexingService(BaseService):
-    """Orchestrates the WIA repository indexing pipeline in persistent batches."""
+    """Orchestrates the WIA repository indexing pipeline with high-throughput parallel processing."""
 
     @classmethod
     def index_workspace(
@@ -53,7 +113,6 @@ class IndexingService(BaseService):
                 None if force_reindex else IndexRepository.load_index(path)
             )
             previous_records = previous_index.files if previous_index else {}
-            existing_batches = previous_index.batches if previous_index else []
 
             # 4. Discover candidate files
             discovered = FileDiscovery.discover_files(path)
@@ -75,8 +134,9 @@ class IndexingService(BaseService):
 
             total_discovered = len(discovered)
             ignored_count = 0
+            max_workers = min(32, (os.cpu_count() or 4) * 4)
 
-            # Process file chunks in batches
+            # Process file chunks in batches with multi-threading
             for idx, chunk in enumerate(file_chunks, start=1):
                 batch_id = f"Batch {idx}"
                 batch_start_t = time.perf_counter()
@@ -96,59 +156,26 @@ class IndexingService(BaseService):
                 b_ignored_cnt = 0
 
                 try:
-                    for file in chunk:
-                        filter_res = file_filter.evaluate(file)
-
-                        if not filter_res.should_index:
-                            b_ignored_cnt += 1
-                            ignored_count += 1
-                            current_records[file.relative_path] = FileRecord(
-                                relative_path=file.relative_path,
-                                file_size=file.file_size,
-                                modified_time=file.modified_time,
-                                extension=Path(file.relative_path).suffix,
-                                indexing_status=IndexingStatus.IGNORED,
-                                exclusion_reason=filter_res.reason,
-                                extra_metadata={"batch_id": batch_id},
+                    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                        futures = [
+                            executor.submit(
+                                _process_single_file,
+                                file,
+                                file_filter,
+                                previous_records,
+                                config.hash_algorithm,
+                                batch_id,
                             )
-                            continue
-
-                        b_indexed_cnt += 1
-                        prev_rec = previous_records.get(file.relative_path) if previous_records else None
-                        extra_meta = prev_rec.extra_metadata.copy() if prev_rec else {}
-                        extra_meta["batch_id"] = batch_id
-
-                        if (
-                            prev_rec
-                            and prev_rec.indexing_status == IndexingStatus.INDEXED
-                            and prev_rec.modified_time == file.modified_time
-                            and prev_rec.file_size == file.file_size
-                            and "symbols" in prev_rec.extra_metadata
-                        ):
-                            content_hash = prev_rec.content_hash
-                        else:
-                            content_hash = FileHasher.hash_file(
-                                file.absolute_path, algorithm=config.hash_algorithm
-                            )
-                            # Extract AST symbols and imports
-                            symbols = ASTParser.parse_file(file.absolute_path)
-                            extra_meta["symbols"] = [s.to_dict() for s in symbols]
-                            extra_meta["imports"] = [
-                                s.name for s in symbols if s.symbol_type == "import"
-                            ]
-
-                        language = LanguageDetector.detect_language(file.absolute_path)
-
-                        current_records[file.relative_path] = FileRecord(
-                            relative_path=file.relative_path,
-                            file_size=file.file_size,
-                            modified_time=file.modified_time,
-                            extension=Path(file.relative_path).suffix,
-                            content_hash=content_hash,
-                            language=language,
-                            indexing_status=IndexingStatus.INDEXED,
-                            extra_metadata=extra_meta,
-                        )
+                            for file in chunk
+                        ]
+                        for fut in futures:
+                            rel_p, rec, is_indexed = fut.result()
+                            current_records[rel_p] = rec
+                            if is_indexed:
+                                b_indexed_cnt += 1
+                            else:
+                                b_ignored_cnt += 1
+                                ignored_count += 1
 
                     # Synthesize batch narrative explanation
                     b_roles: set[str] = set()
@@ -186,55 +213,64 @@ class IndexingService(BaseService):
                     b_record.duration_seconds = b_duration
                     b_record.completed_at = datetime.now(timezone.utc).isoformat()
 
-                # Persist state after each batch completion
-                lang_counts: dict[str, int] = {}
-                for rec in current_records.values():
-                    if rec.indexing_status == IndexingStatus.INDEXED:
-                        lang_counts[rec.language] = lang_counts.get(rec.language, 0) + 1
+            # 7. Run workspace-wide analyzers ONCE concurrently
+            lang_counts: dict[str, int] = {}
+            for rec in current_records.values():
+                if rec.indexing_status == IndexingStatus.INDEXED:
+                    lang_counts[rec.language] = lang_counts.get(rec.language, 0) + 1
 
-                detected_frameworks = FrameworkDetector.detect_frameworks(path)
-                framework_names = [f.name for f in detected_frameworks]
+            indexed_file_paths = [
+                path / fp for fp, r in current_records.items() if r.indexing_status == IndexingStatus.INDEXED
+            ]
 
-                deps = ManifestParser.parse_workspace_manifests(path)
-                dep_conflicts = ConflictDetector.detect_conflicts(deps)
-                git_hotspots = GitAnalyzer.get_file_hotspots(path, top_n=10)
-                security_findings = SecretScanner.scan_workspace(path)
+            with ThreadPoolExecutor(max_workers=4) as analyzer_pool:
+                fut_frameworks = analyzer_pool.submit(FrameworkDetector.detect_frameworks, path)
+                fut_deps = analyzer_pool.submit(ManifestParser.parse_workspace_manifests, path)
+                fut_git = analyzer_pool.submit(GitAnalyzer.get_file_hotspots, path, 10)
+                fut_sec = analyzer_pool.submit(SecretScanner.scan_workspace, path, 2 * 1024 * 1024, indexed_file_paths)
 
-                total_duration = round(time.perf_counter() - start_time, 3)
-                tot_ignored = sum(1 for r in current_records.values() if r.indexing_status == IndexingStatus.IGNORED)
+                detected_frameworks = fut_frameworks.result()
+                deps = fut_deps.result()
+                git_hotspots = fut_git.result()
+                security_findings = fut_sec.result()
 
-                new_index = WorkspaceIndex(
-                    workspace_path=str(path),
-                    files=current_records,
-                    languages=lang_counts,
-                    frameworks=framework_names,
-                    batches=accumulated_batches,
-                    stats={
-                        "total_discovered": total_discovered,
-                        "total_indexed": len(current_records) - tot_ignored,
-                        "total_ignored": tot_ignored,
-                        "indexing_duration_seconds": total_duration,
-                        "dependencies_count": len(deps),
-                        "dependency_conflicts_count": len(dep_conflicts),
-                        "git_hotspots_count": len(git_hotspots),
-                        "security_findings_count": len(security_findings),
-                    },
-                )
-                IndexRepository.save_index(path, new_index)
-                try:
-                    from wia.utils.report_generator import ReportGenerator
-                    ReportGenerator.export_report_json(new_index)
-                    if (path / "wia-report.html").exists():
-                        ReportGenerator.generate_html_report(new_index)
-                except Exception:
-                    pass
+            framework_names = [f.name for f in detected_frameworks]
+            dep_conflicts = ConflictDetector.detect_conflicts(deps)
+
+            total_duration = round(time.perf_counter() - start_time, 3)
+            tot_ignored = sum(1 for r in current_records.values() if r.indexing_status == IndexingStatus.IGNORED)
+
+            new_index = WorkspaceIndex(
+                workspace_path=str(path),
+                files=current_records,
+                languages=lang_counts,
+                frameworks=framework_names,
+                batches=accumulated_batches,
+                stats={
+                    "total_discovered": total_discovered,
+                    "total_indexed": len(current_records) - tot_ignored,
+                    "total_ignored": tot_ignored,
+                    "indexing_duration_seconds": total_duration,
+                    "dependencies_count": len(deps),
+                    "dependency_conflicts_count": len(dep_conflicts),
+                    "git_hotspots_count": len(git_hotspots),
+                    "security_findings_count": len(security_findings),
+                },
+            )
+            IndexRepository.save_index(path, new_index)
+            try:
+                from wia.utils.report_generator import ReportGenerator
+                ReportGenerator.export_report_json(new_index)
+                if (path / "wia-report.html").exists():
+                    ReportGenerator.generate_html_report(new_index)
+            except Exception:
+                pass
 
             # Calculate change summary
             change_summary = ChangeDetector.detect_changes(
                 previous_records=previous_records, current_records=current_records
             )
 
-            tot_ignored = sum(1 for r in current_records.values() if r.indexing_status == IndexingStatus.IGNORED)
             duration = round(time.perf_counter() - start_time, 3)
 
             payload = {
@@ -243,12 +279,12 @@ class IndexingService(BaseService):
                 "total_indexed": len(current_records) - tot_ignored,
                 "total_ignored": tot_ignored,
                 "changes": change_summary.counts,
-                "languages": lang_counts if 'lang_counts' in locals() else {},
-                "frameworks": framework_names if 'framework_names' in locals() else [],
-                "dependencies_count": len(deps) if 'deps' in locals() else 0,
-                "dependency_conflicts_count": len(dep_conflicts) if 'dep_conflicts' in locals() else 0,
-                "git_hotspots_count": len(git_hotspots) if 'git_hotspots' in locals() else 0,
-                "security_findings_count": len(security_findings) if 'security_findings' in locals() else 0,
+                "languages": lang_counts,
+                "frameworks": framework_names,
+                "dependencies_count": len(deps),
+                "dependency_conflicts_count": len(dep_conflicts),
+                "git_hotspots_count": len(git_hotspots),
+                "security_findings_count": len(security_findings),
                 "duration_seconds": duration,
                 "completed_batches": len([b for b in accumulated_batches if b.status == "COMPLETED"]),
                 "total_batches": len(accumulated_batches),

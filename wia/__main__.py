@@ -1,7 +1,7 @@
 """Package entrypoint when invoked via `python -m wia`."""
 
 import sys
-from wia.cli.app import main
+from wia.cli.app import cli_entrypoint
 
 if __name__ == "__main__":
-    sys.exit(main())
+    cli_entrypoint()

@@ -68,16 +68,24 @@ def run_ingestion_pipeline(repo_id: str, custom_path: Optional[str] = None):
             all_symbols: List[ASTSymbol] = []
             file_nodes = [n for n in nodes if not n.is_dir]
 
-            for f_node in file_nodes:
+            from concurrent.futures import ThreadPoolExecutor
+
+            def _parse_node(f_node):
                 try:
                     with open(f_node.path, "r", encoding="utf-8", errors="ignore") as f:
                         code = f.read()
-                    symbols = ASTParserEngine.parse_file(repo_id, f_node.relative_path, code, f_node.language or "Other")
-                    for sym in symbols:
-                        session.add(sym)
-                        all_symbols.append(sym)
+                    return ASTParserEngine.parse_file(repo_id, f_node.relative_path, code, f_node.language or "Other")
                 except Exception as e:
                     logger.debug(f"AST parsing error for {f_node.relative_path}: {e}")
+                    return []
+
+            max_p_workers = min(32, (os.cpu_count() or 4) * 4)
+            with ThreadPoolExecutor(max_workers=max_p_workers) as p_exec:
+                results = p_exec.map(_parse_node, file_nodes)
+                for sym_list in results:
+                    for sym in sym_list:
+                        session.add(sym)
+                        all_symbols.append(sym)
 
             session.commit()
 

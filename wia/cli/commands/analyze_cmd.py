@@ -123,3 +123,15 @@ def analyze_security(workspace: str | None) -> None:
                 f"  {doc_str} {f.rule_id} in {f.file_path}:{f.line_number} -> {f.description}"
             )
             click.echo(f"     Snippet: {f.match_snippet}")
+
+
+@analyze_group.command(name="all", help="Run all workspace analyzers (deps, git, security).")
+@click.option("--workspace", "-w", type=click.Path(exists=True, file_okay=False, dir_okay=True), help="Path to workspace directory.")
+def analyze_all(workspace: str | None) -> None:
+    """Run all analyzers sequentially."""
+    analyze_deps.callback(workspace=workspace)
+    click.echo()
+    analyze_git.callback(workspace=workspace, max_commits=50, top_hotspots=10)
+    click.echo()
+    analyze_security.callback(workspace=workspace)
+

@@ -2,6 +2,26 @@
 
 import sys
 import traceback
+from pathlib import Path
+
+# Ensure UTF-8 output on Windows consoles
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+# Ensure package root is in sys.path dynamically
+_pkg_root = Path(__file__).resolve().parent.parent.parent
+if str(_pkg_root) not in sys.path:
+    sys.path.insert(0, str(_pkg_root))
+
+_backend_dir = _pkg_root / "backend"
+if str(_backend_dir) not in sys.path and _backend_dir.exists():
+    sys.path.insert(0, str(_backend_dir))
+
+
 import click
 import wia
 from wia.cli.commands.version_cmd import version_cmd
@@ -19,6 +39,11 @@ from wia.cli.commands.impact_cmd import impact_cmd
 from wia.cli.commands.ask_cmd import ask_cmd
 from wia.cli.commands.explain_cmd import explain_cmd
 from wia.cli.commands.doctor_cmd import doctor_cmd
+from wia.cli.commands.config_cmd import config_group, auth_cmd
+from wia.cli.commands.flow_cmd import flow_cmd
+from wia.cli.commands.diff_cmd import diff_cmd
+from wia.cli.commands.export_cmd import export_cmd
+from wia.cli.commands.serve_cmd import serve_cmd
 from wia.cli.formatting import format_error
 from wia.exceptions import WIAError
 from wia.utils.logger import setup_logger
@@ -36,12 +61,21 @@ Use WIA to build a persistent, incremental intelligence index of your repository
 
 \b
 Common Commands:
-  init       Initialize WIA workspace metadata (.wia directory)
-  index      Build/update the repository index
-  status     Show current workspace indexing status
-  files      List indexed workspace files
-  info       Display workspace language & framework metadata
-  version    Show WIA version information
+  init          Initialize WIA workspace metadata (.wia directory)
+  index / scan  Build/update the repository index with parallel processing
+  status        Show current workspace indexing status
+  files         List indexed workspace files
+  info          Display workspace language & framework metadata
+  ask / query   Ask AI reasoning agent questions grounded in codebase context
+  explain       Explain specific files or declared AST symbols
+  architecture  View system architecture, boundaries & dependency cycles
+  flow          Trace code execution call flow hierarchy
+  impact        Analyze refactoring blast radius and caller impact
+  diff          Inspect git diff and affected symbols
+  auth          Configure AI provider API keys interactively
+  doctor        Run system diagnostics and verify environment health
+  serve         Launch local backend server daemon
+  version       Show WIA version information
 """,
     epilog="For detailed command usage, run: wia <command> --help",
 )
@@ -63,7 +97,7 @@ def main(ctx: click.Context, verbose: bool) -> None:
         click.echo("Use 'wia --help' for usage and available commands.")
 
 
-# Register CLI subcommands
+# Register core CLI subcommands
 main.add_command(version_cmd)
 main.add_command(init_cmd)
 main.add_command(index_cmd)
@@ -79,6 +113,16 @@ main.add_command(impact_cmd)
 main.add_command(ask_cmd)
 main.add_command(explain_cmd)
 main.add_command(doctor_cmd)
+main.add_command(config_group)
+main.add_command(auth_cmd)
+main.add_command(flow_cmd)
+main.add_command(diff_cmd)
+main.add_command(export_cmd)
+main.add_command(serve_cmd)
+
+# Register command aliases for compatibility
+main.add_command(ask_cmd, name="query")
+main.add_command(index_cmd, name="scan")
 
 
 def cli_entrypoint():

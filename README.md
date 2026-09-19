@@ -1,75 +1,35 @@
 # WIA — Workspace Intelligence Agent
 
-<<<<<<< HEAD
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![Package](https://img.shields.io/badge/PyPI-wia--agent-orange.svg)](https://pypi.org/project/wia-agent/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.100%2B-009688.svg)](https://fastapi.tiangolo.com/)
 [![VS Code Extension](https://img.shields.io/badge/VS_Code_Extension-Ready-007ACC.svg)](https://code.visualstudio.com/)
-[![Tests](https://img.shields.io/badge/Tests-26%20Passed-brightgreen.svg)](https://pytest.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 **Workspace Intelligence Agent (WIA)** is an enterprise-grade, graph-grounded workspace intelligence platform that builds a structured understanding of an entire software repository. It uses that knowledge to answer questions, explain architecture, trace execution flow, analyze dependency impact, onboard developers, and provide grounded AI reasoning with exact file and line citations.
 
 WIA is distributed on PyPI as **`wia-agent`** providing the **`wia`** CLI tool, paired with a **Native VS Code Extension**.
-=======
-> **AI-powered workspace intelligence engine for analyzing, understanding, reporting on, and reasoning over software codebases.**
 
-[![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
-[![PyPI Distribution](https://img.shields.io/badge/pypi-wia--agent-green.svg)](https://pypi.org/project/wia-agent/)
-[![CLI Tool](https://img.shields.io/badge/cli-WIA-green.svg)](https://github.com/Yashwanth112004/Workspace-Intelligence-Agent)
-[![Test Suite](https://img.shields.io/badge/tests-154%20passed-success.svg)](https://github.com/Yashwanth112004/Workspace-Intelligence-Agent/tree/main/tests)
-
-WIA (Workspace Intelligence Agent) is a **CLI-first repository intelligence platform** designed to analyze software repositories, build a structured **Workspace Knowledge Model**, detect change impacts, evaluate architectural boundaries, track dependencies, scan for security leaks, and provide grounded AI reasoning.
-
-Unlike simple chatbot assistants that read raw text snippets, WIA parses abstract syntax trees (AST), constructs directed entity relationship graphs (`IMPORTS`, `DEFINES`, `CALLS`, `DEPENDS_ON`), tracks incremental file hashing, and synthesizes developer explanations grounded in empirical workspace evidence.
->>>>>>> 2ab78d98fcf322c67e73494bb177e2091fdefaf5
 
 ---
 
 ## ⚡ Key Highlights & Core Capabilities
 
-<<<<<<< HEAD
-1. [🏗 System Architecture & End-to-End Pipeline](#1-🏗-system-architecture--end-to-end-pipeline)
-2. [⚡ Complete Technology Stack](#2-⚡-complete-technology-stack)
-3. [📁 Repository Directory Structure](#3-📁-repository-directory-structure)
-4. [💻 Exhaustive Command-Line Interface (CLI) Manual](#4-💻-exhaustive-command-line-interface-cli-manual)
-5. [🧩 Native VS Code Extension Guide](#5-🧩-native-vs-code-extension-guide)
-6. [🚀 Quickstart & Installation Guide](#6-🚀-quickstart--installation-guide)
-   - [PyPI Installation](#pypi-installation)
-   - [Local Development Setup](#local-development-setup)
-   - [Running via WIA Engine Daemon](#running-via-wia-engine-daemon)
-   - [Docker Compose Deployment](#docker-compose-deployment)
-7. [📡 Complete REST API Reference](#7-📡-complete-rest-api-reference)
-8. [🧠 Workspace Knowledge Model & Code Knowledge Graph](#8-🧠-workspace-knowledge-model--code-knowledge-graph)
-9. [🔌 Multi-Language AST Parser Plugin Architecture](#9-🔌-multi-language-ast-parser-plugin-architecture)
-10. [📊 5-Level Hierarchical Workspace Summarization Engine](#10-📊-5-level-hierarchical-workspace-summarization-engine)
-11. [🔍 Hybrid Retrieval Engine & Query Planner](#11-🔍-hybrid-retrieval-engine--query-planner)
-12. [🤖 NVIDIA NIM AI Reasoning Provider](#12-🤖-nvidia-nim-ai-reasoning-provider)
-13. [🛡️ Provenance & Secret Safety Redaction](#13-🛡️-provenance--secret-safety-redaction)
-14. [📦 Open Knowledge Format (OKF) Export](#14-📦-open-knowledge-format-okf-export)
-15. [⚙️ Complete Configuration & Environment Variables (`.env`)](#15-⚙️-complete-configuration--environment-variables-env)
-16. [🧪 Automated Testing Suite](#16-🧪-automated-testing-suite)
-17. [❓ Troubleshooting & FAQ](#17-❓-troubleshooting--faq)
-18. [📚 Documentation Index](#18-📚-documentation-index)
-19. [📄 License](#19-📄-license)
-=======
 * 🔍 **Multi-Stage Indexing Pipeline**: Crawls workspace, respects `.gitignore`, computes SHA-256 content hashes, detects programming languages & tech stacks, and runs specialized analyzers.
 * 🌳 **AST & Symbol Parser**: Extracts classes, functions, methods, parameters, docstrings, parent classes, and import statements across multi-language codebases.
 * 🕸️ **Workspace Knowledge Graph**: Maps directional dependency edges (`IMPORTS`, `DEFINES`, `CALLS`, `DEPENDS_ON`) between files and symbols in a persistent SQLite relational store.
 * 📦 **Dependency Manifest & Conflict Detection**: Parses package manifests (`pyproject.toml`, `requirements.txt`, `package.json`, `Cargo.toml`, `go.mod`), normalizes package names, categorizes dependency types (`runtime`, `dev`, `optional`, `build`), and flags version mismatches.
 * 🔒 **Security Secret Scanner with 100% Masking**: Identifies exposed credentials (AWS keys, RSA private keys, GitHub PATs, API tokens, Slack webhooks), classifies test fixtures vs real secrets, and enforces 100% secret masking (`AKIA************MPLE`).
-* 📊 **Architecture Boundary & Cycle Intelligence**: Maps 9 system component boundaries, detects circular import dependencies via DFS traversal, computes high fan-in/fan-out metrics, and identifies main entrypoints.
+* 📊 **Architecture Boundary & Cycle Intelligence**: Maps system component boundaries, detects circular import dependencies via DFS traversal, computes high fan-in/fan-out metrics, and identifies main entrypoints.
 * 💥 **Symbol Refactoring Impact Analysis**: Evaluates symbol callers and file importers, resolves same-name symbols, differentiates direct callers from file importers, and assigns risk classifications (`LOW`, `MEDIUM`, `HIGH`).
-* 🧠 **Intent-Grounded AI Reasoning Agent**: Answers developer queries (`wia ask`) using lightweight query intent classification (`ARCHITECTURE`, `WORKFLOW`, `COMPONENT`, `STORAGE`, `FILE_SYMBOL`, `GENERAL`) and custom RAG context retrieval.
+* 🧠 **Intent-Grounded AI Reasoning Agent**: Answers developer queries (`wia ask`) using lightweight query intent classification and custom RAG context retrieval with NVIDIA NIM, OpenAI, Gemini, Anthropic, or offline intelligence.
 * 📖 **Developer-Level Code Explanation**: Explains target files and symbols (`wia explain`), detailing purpose, architectural role, symbols breakdown, used-by dependents, and likely modification consequences.
 * 📊 **Persistent HTML Narrative Dashboard**: Generates self-contained, batch-accumulating HTML reports (`wia-report.html`) with executive narrative summaries, component architecture cards, and file intelligence tables.
->>>>>>> 2ab78d98fcf322c67e73494bb177e2091fdefaf5
+
 
 ---
 
-## 💻 Quickstart & Installation
-
-<<<<<<< HEAD
+## 1. 🏗 System Architecture & End-to-End Pipeline
 ```
               GitHub Repository URL or Local Workspace Directory
                                      │
@@ -258,9 +218,18 @@ The **WIA VS Code Extension** embeds graph-grounded code intelligence directly i
 # Install WIA distribution from PyPI
 pip install wia-agent
 
-# Verify CLI
+# Verify CLI installation
 wia --help
+
+# Alternatively, run directly via Python module (works without PATH configuration):
+python -m wia --help
 ```
+
+> [!TIP]
+> **PATH Troubleshooting**: If `wia` is not recognized after installing with `pip install --user`, add Python's `Scripts` directory to your system `PATH`, or run `wia doctor` / `python -m wia doctor` for automatic diagnostic guidance.
+> - **Windows (PowerShell)**: `[Environment]::SetEnvironmentVariable("Path", $env:Path + ";$([System.IO.Path]::Combine($env:APPDATA, 'Python', 'Python312', 'Scripts'))", "User")`
+> - **macOS / Linux**: `export PATH="$HOME/.local/bin:$PATH"`
+
 
 ### Local Development Setup
 ```bash
@@ -510,25 +479,6 @@ wia init .
 
 ---
 
-<<<<<<< HEAD
-## 18. 📚 Documentation Index
-
-- [System Architecture Details](docs/ARCHITECTURE.md)
-- [Workspace Knowledge Model](docs/KNOWLEDGE_MODEL.md)
-- [Hybrid Retrieval Engine](docs/RETRIEVAL.md)
-- [Provenance & Citations](docs/PROVENANCE.md)
-- [AI Architecture & NVIDIA NIM](docs/AI_ARCHITECTURE.md)
-- [Python Packaging Guide](docs/PACKAGING.md)
-- [VS Code Extension Developer Guide](docs/VSCODE_EXTENSION.md)
-- [Open Knowledge Format Export](docs/OKF_EXPORT.md)
-- [REST API Specification](docs/API.md)
-- [CLI User Manual](docs/CLI.md)
-- [Hierarchical Summarization Guide](docs/HIERARCHICAL_SUMMARIZATION.md)
-
----
-
-## 19. 📄 License
-=======
 ### 2. `wia index` — Run Indexing & Multi-Analyzer Pipeline
 
 Executes file discovery, `.gitignore` filtering, SHA-256 change detection, language & framework detection, AST parsing, dependency manifest analysis, Git hotspot tracking, secret scanning, graph building, and SQLite database persistence.
@@ -549,7 +499,6 @@ wia index --force-reindex
 ---
 
 ### 3. `wia status` — Check Workspace Synchronization Status
->>>>>>> 2ab78d98fcf322c67e73494bb177e2091fdefaf5
 
 Compares the last completed index state against the current filesystem to detect added, modified, or deleted files without mutating index data.
 
