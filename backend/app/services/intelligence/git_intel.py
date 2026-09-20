@@ -23,22 +23,33 @@ class GitIntelligence:
                 import git
                 repo = git.Repo(repo_root)
                 # Unstaged / modified files
-                for item in repo.index.diff(None):
-                    if item.change_type == 'M':
-                        changed_files.append(item.a_path.replace("\\", "/"))
-                    elif item.change_type == 'D':
-                        deleted_files.append(item.a_path.replace("\\", "/"))
+                try:
+                    for item in repo.index.diff(None):
+                        if item.change_type == 'M':
+                            changed_files.append(item.a_path.replace("\\", "/"))
+                        elif item.change_type == 'D':
+                            deleted_files.append(item.a_path.replace("\\", "/"))
+                except Exception as diff_err:
+                    logger.debug(f"Unstaged diff: {diff_err}")
+
                 # Staged files
-                for item in repo.index.diff("HEAD"):
-                    if item.change_type == 'M' and item.a_path not in changed_files:
-                        changed_files.append(item.a_path.replace("\\", "/"))
-                    elif item.change_type == 'A' and item.a_path not in added_files:
-                        added_files.append(item.a_path.replace("\\", "/"))
-                    elif item.change_type == 'D' and item.a_path not in deleted_files:
-                        deleted_files.append(item.a_path.replace("\\", "/"))
+                try:
+                    for item in repo.index.diff("HEAD"):
+                        if item.change_type == 'M' and item.a_path not in changed_files:
+                            changed_files.append(item.a_path.replace("\\", "/"))
+                        elif item.change_type == 'A' and item.a_path not in added_files:
+                            added_files.append(item.a_path.replace("\\", "/"))
+                        elif item.change_type == 'D' and item.a_path not in deleted_files:
+                            deleted_files.append(item.a_path.replace("\\", "/"))
+                except Exception as head_err:
+                    logger.debug(f"Staged diff: {head_err}")
+
                 # Untracked files
-                for untracked in repo.untracked_files:
-                    added_files.append(untracked.replace("\\", "/"))
+                try:
+                    for untracked in repo.untracked_files:
+                        added_files.append(untracked.replace("\\", "/"))
+                except Exception as untracked_err:
+                    logger.debug(f"Untracked files: {untracked_err}")
             except Exception as e:
                 logger.warning(f"Git diff inspection fallback: {e}")
 

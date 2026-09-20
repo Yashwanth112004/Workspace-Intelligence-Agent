@@ -17,10 +17,10 @@ class Repository(SQLModel, table=True):
     # Metadata
     total_files: int = 0
     total_loc: int = 0
-    tech_stack: Dict[str, int] = Field(default={}, sa_column=Column(JSON)) # lang -> LOC or file count
-    dependencies: List[str] = Field(default=[], sa_column=Column(JSON))
-    entry_points: List[str] = Field(default=[], sa_column=Column(JSON))
-    config_files: List[str] = Field(default=[], sa_column=Column(JSON))
+    tech_stack: Dict[str, int] = Field(default_factory=dict, sa_column=Column(JSON)) # lang -> LOC or file count
+    dependencies: List[str] = Field(default_factory=list, sa_column=Column(JSON))
+    entry_points: List[str] = Field(default_factory=list, sa_column=Column(JSON))
+    config_files: List[str] = Field(default_factory=list, sa_column=Column(JSON))
     error_message: Optional[str] = None
 
 class FileNode(SQLModel, table=True):
@@ -46,10 +46,10 @@ class ASTSymbol(SQLModel, table=True):
     start_line: int = 0
     end_line: int = 0
     docstring: Optional[str] = None
-    parameters: List[str] = Field(default=[], sa_column=Column(JSON))
+    parameters: List[str] = Field(default_factory=list, sa_column=Column(JSON))
     return_type: Optional[str] = None
-    calls: List[str] = Field(default=[], sa_column=Column(JSON))
-    imported_symbols: List[str] = Field(default=[], sa_column=Column(JSON))
+    calls: List[str] = Field(default_factory=list, sa_column=Column(JSON))
+    imported_symbols: List[str] = Field(default_factory=list, sa_column=Column(JSON))
 
 class WorkspaceSummary(SQLModel, table=True):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
@@ -58,8 +58,8 @@ class WorkspaceSummary(SQLModel, table=True):
     target_path: str = Field(index=True) # relative path or "" for repo
     name: str
     summary_text: str
-    key_components: List[str] = Field(default=[], sa_column=Column(JSON))
-    dependencies: List[str] = Field(default=[], sa_column=Column(JSON))
+    key_components: List[str] = Field(default_factory=list, sa_column=Column(JSON))
+    dependencies: List[str] = Field(default_factory=list, sa_column=Column(JSON))
     created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
 
 class VectorChunk(SQLModel, table=True):
@@ -70,4 +70,4 @@ class VectorChunk(SQLModel, table=True):
     content: str
     start_line: int = 0
     end_line: int = 0
-    embedding: List[float] = Field(default=[], sa_column=Column(JSON))
+    embedding: List[float] = Field(default_factory=list, sa_column=Column(JSON))

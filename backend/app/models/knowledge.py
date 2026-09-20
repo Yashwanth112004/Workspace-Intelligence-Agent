@@ -51,7 +51,7 @@ class KnowledgeEntity(SQLModel, table=True):
     complexity: int = 1
     visibility: str = "public"
     provenance_type: str = Field(default=ProvenanceType.DETERMINISTIC_FACT.value)
-    properties: Dict[str, Any] = Field(default={}, sa_column=Column(JSON))
+    properties: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
 
 class KnowledgeRelationship(SQLModel, table=True):
@@ -66,7 +66,7 @@ class KnowledgeRelationship(SQLModel, table=True):
     provenance_type: str = Field(default=ProvenanceType.DETERMINISTIC_FACT.value)
     source_location: Optional[str] = None # file:start-end
     confidence: float = 1.0
-    properties: Dict[str, Any] = Field(default={}, sa_column=Column(JSON))
+    properties: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
 
 class ProvenanceRecord(SQLModel, table=True):

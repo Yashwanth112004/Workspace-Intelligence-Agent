@@ -1,7 +1,6 @@
 import os
 from typing import Optional
-from pydantic import ConfigDict
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Workspace Intelligence Agent (WIA)"
@@ -33,7 +32,7 @@ class Settings(BaseSettings):
     # Vector Search & Local Embeddings
     EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
     
-    model_config = ConfigDict(env_file=".env", case_sensitive=True, extra="ignore")
+    model_config = SettingsConfigDict(env_file=".env", case_sensitive=True, extra="ignore")
 
 settings = Settings()
 
