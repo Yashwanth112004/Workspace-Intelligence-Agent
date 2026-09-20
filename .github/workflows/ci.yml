@@ -37,7 +37,17 @@ jobs:
 
       - name: Run automated test suite
         run: |
-          pytest -v
+          pytest -v --tb=short 2>&1 | tee pytest_output.log
+
+      - name: Publish Test Summary
+        if: always()
+        run: |
+          if [ -f pytest_output.log ]; then
+            echo "### Pytest Summary (${{ matrix.python-version }})" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            tail -n 80 pytest_output.log >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
 
       - name: Build package distributions
         run: |
