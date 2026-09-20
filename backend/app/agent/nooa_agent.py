@@ -99,7 +99,10 @@ Provide a structured, authoritative technical response grounded strictly in the 
             response_text = f"No relevant implementation, symbol, or evidence for '{user_query}' was found in the indexed workspace knowledge base for '{self.repo.name}'."
         else:
             # Deterministic synthesis from retrieved evidence
-            chunks_summary = "\n".join([f"- `{c.file_path}` (lines {c.start_line}-{c.end_line}): {c.content[:180]}..." for c in retrieval.get("chunks", [])[:3]])
+            chunks_summary = "\n".join([
+                f"- `{c['file_path'] if isinstance(c, dict) else c.file_path}` (lines {c.get('start_line', 1) if isinstance(c, dict) else getattr(c, 'start_line', 1)}-{c.get('end_line', 1) if isinstance(c, dict) else getattr(c, 'end_line', 1)}): {(c.get('content', '') if isinstance(c, dict) else getattr(c, 'content', ''))[:180]}..."
+                for c in retrieval.get("chunks", [])[:3]
+            ])
             response_text = f"### Grounded Codebase Evidence for `{self.repo.name}`\n\nBased on indexed AST symbols and source chunks:\n\n{chunks_summary}\n\n*Note: Configure `NVIDIA_NIM_API_KEY` to enable advanced multi-step LLM reasoning.*"
 
         return {
