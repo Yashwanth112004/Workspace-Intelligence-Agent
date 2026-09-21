@@ -9,7 +9,7 @@ def test_package_version():
     """Verify single source of truth version definition."""
     assert hasattr(wia, "__version__")
     assert isinstance(wia.__version__, str)
-    assert wia.__version__ == "0.1.3"
+    assert wia.__version__ == "0.1.4"
 
 
 def test_constants():
