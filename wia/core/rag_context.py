@@ -134,8 +134,14 @@ class RAGContextGenerator:
             symbols = rec.extra_metadata.get("symbols", [])
             sym_count = len(symbols)
             if sym_count > 0:
-                top_syms = ", ".join(f"`{s.get('name')}`" for s in symbols[:6] if s.get("name"))
-                lines.append(f"- `{rec.relative_path}` ({rec.language}, {rec.file_type}): defines {sym_count} symbols ({top_syms})")
+                short_syms = []
+                for s in symbols[:5]:
+                    name = s.get("name", "")
+                    if name:
+                        short_name = name.split(".")[-1]
+                        short_syms.append(f"`{short_name}`")
+                top_str = ", ".join(short_syms)
+                lines.append(f"- `{rec.relative_path}` ({rec.language}, {rec.file_type}): defines {sym_count} symbols ({top_str})")
             else:
                 lines.append(f"- `{rec.relative_path}` ({rec.language}, {rec.file_type})")
         lines.append("")

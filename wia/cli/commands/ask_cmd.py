@@ -15,8 +15,12 @@ def _prompt_api_key_if_missing(api_key: str | None, offline: bool) -> tuple[str 
         return api_key, offline
 
     _load_env_file()
+    from wia.llm.base import _get_stored_user_config
+    cfg = _get_stored_user_config()
+
     existing_key = (
-        os.getenv("NVIDIA_NIM_API_KEY")
+        cfg.get("ai_api_key")
+        or os.getenv("NVIDIA_NIM_API_KEY")
         or os.getenv("NVIDIA_API_KEY")
         or os.getenv("OPENAI_API_KEY")
         or os.getenv("GEMINI_API_KEY")

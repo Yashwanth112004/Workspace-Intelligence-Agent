@@ -6,11 +6,25 @@ import os
 import urllib.error
 import urllib.request
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Any, Optional
 
 from wia.core.config import WorkspaceConfig
 
 logger = logging.getLogger("wia.llm")
+
+CONFIG_FILE_PATH = Path.home() / ".wia" / "config.json"
+
+
+def _get_stored_user_config() -> dict:
+    """Read ~/.wia/config.json safely."""
+    if not CONFIG_FILE_PATH.exists():
+        return {}
+    try:
+        with open(CONFIG_FILE_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
 
 
 class AIProvider(ABC):
@@ -34,7 +48,7 @@ class NvidiaNimProvider(AIProvider):
     """NVIDIA NIM API provider connecting to hosted or self-hosted NIM endpoints."""
 
     DEFAULT_ENDPOINT = "https://integrate.api.nvidia.com/v1/chat/completions"
-    DEFAULT_MODEL = "meta/llama-3.1-70b-instruct"
+    DEFAULT_MODEL = "meta/llama-3.3-70b-instruct"
 
     def __init__(
         self,
@@ -43,18 +57,27 @@ class NvidiaNimProvider(AIProvider):
         endpoint: str | None = None,
         timeout: float = 45.0,
     ):
+        cfg = _get_stored_user_config()
         if api_key is not None:
             self.api_key = api_key
         else:
             self.api_key = (
-                os.environ.get("NVIDIA_NIM_API_KEY")
+                cfg.get("ai_api_key")
+                or os.environ.get("NVIDIA_NIM_API_KEY")
                 or os.environ.get("NVIDIA_API_KEY")
                 or os.environ.get("NIM_API_KEY")
                 or ""
             )
-        self.model = model or os.environ.get("NVIDIA_MODEL") or os.environ.get("NVIDIA_NIM_MODEL") or self.DEFAULT_MODEL
+        self.model = (
+            model
+            or cfg.get("ai_model")
+            or os.environ.get("NVIDIA_MODEL")
+            or os.environ.get("NVIDIA_NIM_MODEL")
+            or self.DEFAULT_MODEL
+        )
         self.endpoint = (
             endpoint
+            or cfg.get("ai_endpoint")
             or os.environ.get("NVIDIA_ENDPOINT")
             or os.environ.get("NVIDIA_NIM_ENDPOINT")
             or self.DEFAULT_ENDPOINT
@@ -68,13 +91,12 @@ class NvidiaNimProvider(AIProvider):
     def generate(self, prompt: str, context: str, options: dict[str, Any] | None = None) -> str:
         """Query NVIDIA NIM API endpoint with grounded context and prompt."""
         if not self.is_available():
+            grounded_fallback = LocalReasoningProvider().generate(prompt, context, options)
             return (
-                "AI provider (NVIDIA NIM) is not configured.\n\n"
-                "To enable AI reasoning, set the environment variable:\n"
-                "  export NVIDIA_API_KEY='nvapi-...'\n\n"
-                "Or configure it via:\n"
-                "  wia config --set-key <YOUR_NVIDIA_API_KEY>\n\n"
-                "Falling back to deterministic workspace retrieval analysis."
+                f"[⚠️ Notice: AI provider (NVIDIA NIM) is not configured (NVIDIA_API_KEY is not set). "
+                f"Displaying grounded local intelligence.]\n\n"
+                f"To configure your key, set NVIDIA_API_KEY or run: wia auth / wia config --set-key <KEY>\n\n"
+                f"{grounded_fallback}"
             )
 
         system_prompt = (
@@ -120,22 +142,36 @@ class NvidiaNimProvider(AIProvider):
 
         except urllib.error.HTTPError as err:
             err_msg = f"HTTP Error {err.code}: {err.reason}"
-            if err.code == 401:
-                return "Authentication Failed (401): The provided NVIDIA API key is invalid or expired. Check your NVIDIA_API_KEY."
-            elif err.code == 429:
-                return "Rate Limit Exceeded (429): NVIDIA NIM API rate limit reached. Please try again later."
-            return f"NVIDIA NIM API error ({err_msg}). Ensure endpoint '{self.endpoint}' and model '{self.model}' are reachable."
+            logger.warning(f"NVIDIA NIM API error ({err_msg}). Falling back to local reasoning.")
+            grounded_fallback = LocalReasoningProvider().generate(prompt, context, options)
+            return (
+                f"[⚠️ Notice: NVIDIA NIM API returned {err_msg} for model '{self.model}'. "
+                f"Falling back to local grounded reasoning engine.]\n\n"
+                f"{grounded_fallback}"
+            )
         except urllib.error.URLError as err:
-            return f"Network Error: Unable to connect to NVIDIA NIM endpoint ({err.reason})."
+            logger.warning(f"Network error connecting to NVIDIA NIM ({err.reason}). Falling back to local reasoning.")
+            grounded_fallback = LocalReasoningProvider().generate(prompt, context, options)
+            return (
+                f"[⚠️ Notice: Could not connect to NVIDIA NIM endpoint ({err.reason}). "
+                f"Falling back to local grounded reasoning engine.]\n\n"
+                f"{grounded_fallback}"
+            )
         except Exception as err:
-            return f"Reasoning execution error: {type(err).__name__} occurred while querying AI provider."
+            logger.warning(f"Reasoning error: {err}. Falling back to local reasoning.")
+            grounded_fallback = LocalReasoningProvider().generate(prompt, context, options)
+            return (
+                f"[⚠️ Notice: Remote AI query encountered an issue ({type(err).__name__}). "
+                f"Falling back to local grounded reasoning engine.]\n\n"
+                f"{grounded_fallback}"
+            )
 
 
 NvidiaNIMProvider = NvidiaNimProvider
 
 
 class OpenAIProvider(AIProvider):
-    """Universal OpenAI-compatible API provider."""
+    """Universal OpenAI-compatible API provider (OpenAI, Groq, OpenRouter, Ollama, Local)."""
 
     def __init__(
         self,
@@ -143,16 +179,32 @@ class OpenAIProvider(AIProvider):
         base_url: str | None = None,
         model: str = "gpt-4o",
     ):
-        self.api_key = api_key or os.environ.get("OPENAI_API_KEY") or ""
-        self.base_url = base_url or os.environ.get("OPENAI_BASE_URL") or "https://api.openai.com/v1"
-        self.model = model
+        cfg = _get_stored_user_config()
+        if api_key is not None:
+            self.api_key = api_key
+        else:
+            self.api_key = (
+                cfg.get("ai_api_key")
+                or os.environ.get("OPENAI_API_KEY")
+                or os.environ.get("GROQ_API_KEY")
+                or os.environ.get("OPENROUTER_API_KEY")
+                or ""
+            )
+        self.base_url = (
+            base_url
+            or cfg.get("ai_endpoint")
+            or os.environ.get("OPENAI_BASE_URL")
+            or "https://api.openai.com/v1"
+        )
+        self.model = model or cfg.get("ai_model") or os.environ.get("OPENAI_MODEL") or "gpt-4o"
 
     def is_available(self) -> bool:
         return bool(self.api_key and self.api_key.strip())
 
     def generate(self, prompt: str, context: str, options: dict[str, Any] | None = None) -> str:
         if not self.is_available():
-            return "OpenAI API key not configured. Set OPENAI_API_KEY environment variable."
+            grounded = LocalReasoningProvider().generate(prompt, context, options)
+            return f"[⚠️ Notice: OpenAI API key is not configured. Displaying local grounded reasoning.]\n\n{grounded}"
         try:
             from openai import OpenAI
             client = OpenAI(api_key=self.api_key, base_url=self.base_url)
@@ -178,7 +230,8 @@ class OpenAIProvider(AIProvider):
             return "No response generated by model."
         except Exception as err:
             logger.warning(f"OpenAI API generation failed: {err}")
-            return LocalReasoningProvider().generate(prompt, context)
+            grounded = LocalReasoningProvider().generate(prompt, context, options)
+            return f"[⚠️ Notice: Remote OpenAI API query failed ({err}). Falling back to local grounded reasoning.]\n\n{grounded}"
 
 
 OpenAICompatibleProvider = OpenAIProvider
@@ -188,15 +241,20 @@ class GeminiProvider(AIProvider):
     """Google Gemini AI reasoning provider."""
 
     def __init__(self, api_key: str | None = None, model: str | None = None):
-        self.api_key = api_key or os.environ.get("GEMINI_API_KEY") or ""
-        self.model = model or os.environ.get("GEMINI_MODEL") or "gemini-1.5-flash"
+        cfg = _get_stored_user_config()
+        if api_key is not None:
+            self.api_key = api_key
+        else:
+            self.api_key = cfg.get("ai_api_key") or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY") or ""
+        self.model = model or cfg.get("ai_model") or os.environ.get("GEMINI_MODEL") or "gemini-1.5-flash"
 
     def is_available(self) -> bool:
         return bool(self.api_key and self.api_key.strip())
 
     def generate(self, prompt: str, context: str, options: dict[str, Any] | None = None) -> str:
         if not self.is_available():
-            return "Gemini API key not configured. Set GEMINI_API_KEY environment variable."
+            grounded = LocalReasoningProvider().generate(prompt, context, options)
+            return f"[⚠️ Notice: Google Gemini API key not configured. Displaying local grounded reasoning.]\n\n{grounded}"
         try:
             import google.generativeai as genai
             genai.configure(api_key=self.api_key)
@@ -212,22 +270,28 @@ class GeminiProvider(AIProvider):
             return resp.text.strip() if resp and resp.text else ""
         except Exception as err:
             logger.warning(f"Gemini generation failed: {err}")
-            return LocalReasoningProvider().generate(prompt, context)
+            grounded = LocalReasoningProvider().generate(prompt, context, options)
+            return f"[⚠️ Notice: Gemini API failed ({err}). Falling back to local grounded reasoning.]\n\n{grounded}"
 
 
 class AnthropicProvider(AIProvider):
     """Anthropic Claude AI reasoning provider."""
 
     def __init__(self, api_key: str | None = None, model: str | None = None):
-        self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY") or ""
-        self.model = model or os.environ.get("ANTHROPIC_MODEL") or "claude-3-5-sonnet-20241022"
+        cfg = _get_stored_user_config()
+        if api_key is not None:
+            self.api_key = api_key
+        else:
+            self.api_key = cfg.get("ai_api_key") or os.environ.get("ANTHROPIC_API_KEY") or ""
+        self.model = model or cfg.get("ai_model") or os.environ.get("ANTHROPIC_MODEL") or "claude-3-5-sonnet-20241022"
 
     def is_available(self) -> bool:
         return bool(self.api_key and self.api_key.strip())
 
     def generate(self, prompt: str, context: str, options: dict[str, Any] | None = None) -> str:
         if not self.is_available():
-            return "Anthropic API key not configured. Set ANTHROPIC_API_KEY environment variable."
+            grounded = LocalReasoningProvider().generate(prompt, context, options)
+            return f"[⚠️ Notice: Anthropic API key not configured. Displaying local grounded reasoning.]\n\n{grounded}"
         try:
             import anthropic
             client = anthropic.Anthropic(api_key=self.api_key)
@@ -243,7 +307,8 @@ class AnthropicProvider(AIProvider):
             return msg.content[0].text if msg and msg.content else ""
         except Exception as err:
             logger.warning(f"Anthropic generation failed: {err}")
-            return LocalReasoningProvider().generate(prompt, context)
+            grounded = LocalReasoningProvider().generate(prompt, context, options)
+            return f"[⚠️ Notice: Anthropic API failed ({err}). Falling back to local grounded reasoning.]\n\n{grounded}"
 
 
 class LocalReasoningProvider(AIProvider):
@@ -253,49 +318,81 @@ class LocalReasoningProvider(AIProvider):
         """Synthesize a structured, grounded answer from provided workspace context."""
         if not context or not context.strip():
             return (
-                "Answer:\n"
+                "Project Overview\n"
+                "----------------\n"
                 "Insufficient workspace context available to answer the query.\n\n"
-                "Evidence:\n"
+                "Evidence\n"
+                "--------\n"
                 "  * No matching files or symbols were found in the active workspace index."
             )
 
         p_lower = prompt.lower().strip()
 
-        # Extract context lines for grounded synthesis
-        context_lines = [l.strip() for l in context.splitlines() if l.strip()]
+        # Parse grounded context lines
+        context_lines = [line.strip() for line in context.splitlines() if line.strip()]
         tech_lines = [l for l in context_lines if l.startswith("- **") and ":" in l]
-        file_headers = [l.replace("### File: ", "").strip("`") for l in context_lines if l.startswith("### File: ")]
+        file_headers = []
+        for l in context_lines:
+            if l.startswith("### File: "):
+                raw_f = l.replace("### File: ", "").strip()
+                if raw_f.startswith("`") and "`" in raw_f[1:]:
+                    raw_f = raw_f.split("`")[1]
+                elif " — " in raw_f:
+                    raw_f = raw_f.split(" — ")[0].strip("`")
+                else:
+                    raw_f = raw_f.strip("`")
+                if raw_f and raw_f not in file_headers:
+                    file_headers.append(raw_f)
+
+        # Extract declared symbols from code blocks
+        declared_symbols = []
+        for line in context_lines:
+            if line.startswith("class ") or line.startswith("def ") or line.startswith("async def "):
+                sym_name = line.split("(")[0].split(":")[0].replace("async ", "").replace("class ", "").replace("def ", "").strip()
+                if sym_name and sym_name not in declared_symbols:
+                    declared_symbols.append(sym_name)
 
         # 1. Project Overview & Architecture Queries
-        if any(w in p_lower for w in ("explain the project", "overview", "what does this project do", "architecture", "what is this repo")):
-            tech_summary = "\n".join(f"  * {t.lstrip('- ')}" for t in tech_lines[:8]) if tech_lines else "  * Python workspace components"
+        if any(w in p_lower for w in ("explain", "overview", "what does", "project", "repo", "architecture", "structure")):
+            tech_summary = "\n".join(f"  * {t.lstrip('- ')}" for t in tech_lines[:8]) if tech_lines else "  * Python workspace modules"
             key_files = "\n".join(f"  * `{f}`" for f in file_headers[:8]) if file_headers else "  * Indexed workspace modules"
+            key_syms = "\n".join(f"  * `{s}`" for s in declared_symbols[:8]) if declared_symbols else "  * AST symbol definitions"
 
             return (
-                "Project Overview\n"
-                "----------------\n"
-                "This workspace is a software project analyzed through WIA's AST parsing and relationship graph.\n\n"
-                "Architecture & Core Subsystems\n"
-                "------------------------------\n"
-                "The repository organizes its capabilities across modular components evidenced in the source tree:\n"
+                "Project Overview & Architecture Summary\n"
+                "======================================\n\n"
+                "1. Purpose & Domain\n"
+                "-------------------\n"
+                "This workspace is a software platform analyzed through WIA's AST parsing, dependency mapping, "
+                "and directional knowledge graph engine.\n\n"
+                "2. Core Architectural Subsystems & Key Modules\n"
+                "----------------------------------------------\n"
+                "The repository organizes its core functionality across modular components evidenced in the source tree:\n"
                 f"{key_files}\n\n"
-                "Technology Stack\n"
-                "----------------\n"
+                "3. Key Declared Classes & Symbols\n"
+                "---------------------------------\n"
+                f"{key_syms}\n\n"
+                "4. Technology Stack & Frameworks\n"
+                "--------------------------------\n"
                 f"{tech_summary}\n\n"
                 "Evidence\n"
                 "--------\n"
                 f"{key_files}"
             )
 
-        # 2. General Query Grounded Synthesis
+        # 2. General Grounded Query Synthesis
         top_files = "\n".join(f"  * `{f}`" for f in file_headers[:6]) if file_headers else "  * Active WorkspaceIndex & WorkspaceGraph"
+        top_syms = "\n".join(f"  * `{s}`" for s in declared_symbols[:6]) if declared_symbols else "  * Relevant AST symbols"
 
         return (
-            f"Answer\n"
-            f"------\n"
-            f"Analysis for query '{prompt}':\n\n"
-            f"Relevant Components & Context\n"
-            f"-----------------------------\n"
+            f"Answer for: '{prompt}'\n"
+            f"======================================\n\n"
+            f"Analysis & Relevant Logic\n"
+            f"-------------------------\n"
+            f"Based on the indexed workspace structure and AST symbols:\n"
+            f"{top_syms}\n\n"
+            f"Relevant Components\n"
+            f"-------------------\n"
             f"{top_files}\n\n"
             f"Evidence\n"
             f"--------\n"
@@ -322,11 +419,13 @@ class AIProviderFactory:
 
         if p_name in ("nvidia", "nvidia_nim", "nim") or (not p_name and (os.environ.get("NVIDIA_API_KEY") or os.environ.get("NVIDIA_NIM_API_KEY"))):
             return NvidiaNimProvider()
-        elif p_name == "openai" or (not p_name and os.environ.get("OPENAI_API_KEY")):
+        elif p_name in ("openai", "groq", "openrouter", "ollama", "custom") or (not p_name and os.environ.get("OPENAI_API_KEY")):
             return OpenAIProvider()
-        elif p_name == "gemini" or (not p_name and os.environ.get("GEMINI_API_KEY")):
+        elif p_name == "gemini" or (not p_name and (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"))):
             return GeminiProvider()
         elif p_name == "anthropic" or (not p_name and os.environ.get("ANTHROPIC_API_KEY")):
             return AnthropicProvider()
+        elif p_name == "local":
+            return LocalReasoningProvider()
         else:
             return LocalReasoningProvider()
