@@ -93,5 +93,5 @@ extraPaths = ["backend"]
 minversion = "7.0"
 addopts = "-ra -q"
 pythonpath = [".", "backend"]
-testpaths = ["tests", "backend/tests"]
+testpaths = ["tests"]
 python_files = ["test_*.py"]
