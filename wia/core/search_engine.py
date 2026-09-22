@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from wia.core.index_model import WorkspaceIndex
+from wia.core.inverted_index import WorkspaceInvertedIndex
 from wia.core.metadata import IndexingStatus
 
 
@@ -29,6 +30,22 @@ class SearchResult:
 class WorkspaceSearchEngine:
     """Multi-evidence search engine across filenames, symbols, docstrings, and relationships."""
 
+    # Inverted index cache attached per WorkspaceIndex instance ID
+    _inverted_cache: dict[int, WorkspaceInvertedIndex] = {}
+
+    @classmethod
+    def get_or_build_inverted_index(cls, index: WorkspaceIndex) -> WorkspaceInvertedIndex:
+        """Retrieve or build cached inverted index for given WorkspaceIndex."""
+        idx_id = id(index)
+        if idx_id in cls._inverted_cache:
+            inv = cls._inverted_cache[idx_id]
+            if inv._indexed_count == len(index.files):
+                return inv
+
+        inv = WorkspaceInvertedIndex.build_from_index(index)
+        cls._inverted_cache[idx_id] = inv
+        return inv
+
     @classmethod
     def search(
         cls,
@@ -46,7 +63,22 @@ class WorkspaceSearchEngine:
         tokens = [t for t in re.findall(r"[a-zA-Z0-9_]+", query_norm) if len(t) >= 2]
         results: list[SearchResult] = []
 
-        for rel_path, rec in index.files.items():
+        # Accelerate candidate selection via Inverted Index
+        inv = cls.get_or_build_inverted_index(index)
+        candidate_paths = inv.find_candidate_files(
+            query=query,
+            language_filter=language_filter,
+            symbol_type_filter=symbol_type_filter,
+        )
+
+        # If candidates were found, iterate over candidates; otherwise scan indexed files
+        target_records = (
+            [(p, index.files[p]) for p in candidate_paths if p in index.files]
+            if candidate_paths
+            else list(index.files.items())
+        )
+
+        for rel_path, rec in target_records:
             if rec.indexing_status != IndexingStatus.INDEXED:
                 continue
 

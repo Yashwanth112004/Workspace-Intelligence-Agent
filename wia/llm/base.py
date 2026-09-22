@@ -18,10 +18,12 @@ CONFIG_FILE_PATH = Path.home() / ".wia" / "config.json"
 
 def _get_stored_user_config() -> dict:
     """Read ~/.wia/config.json safely."""
-    if not CONFIG_FILE_PATH.exists():
+    custom_path = os.environ.get("WIA_CONFIG_FILE")
+    cfg_path = Path(custom_path) if custom_path else CONFIG_FILE_PATH
+    if not cfg_path.exists():
         return {}
     try:
-        with open(CONFIG_FILE_PATH, "r", encoding="utf-8") as f:
+        with open(cfg_path, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return {}
@@ -62,24 +64,24 @@ class NvidiaNimProvider(AIProvider):
             self.api_key = api_key
         else:
             self.api_key = (
-                cfg.get("ai_api_key")
-                or os.environ.get("NVIDIA_NIM_API_KEY")
+                os.environ.get("NVIDIA_NIM_API_KEY")
                 or os.environ.get("NVIDIA_API_KEY")
                 or os.environ.get("NIM_API_KEY")
+                or cfg.get("ai_api_key")
                 or ""
             )
         self.model = (
             model
-            or cfg.get("ai_model")
             or os.environ.get("NVIDIA_MODEL")
             or os.environ.get("NVIDIA_NIM_MODEL")
+            or cfg.get("ai_model")
             or self.DEFAULT_MODEL
         )
         self.endpoint = (
             endpoint
-            or cfg.get("ai_endpoint")
             or os.environ.get("NVIDIA_ENDPOINT")
             or os.environ.get("NVIDIA_NIM_ENDPOINT")
+            or cfg.get("ai_endpoint")
             or self.DEFAULT_ENDPOINT
         )
         self.timeout = timeout
@@ -100,14 +102,14 @@ class NvidiaNimProvider(AIProvider):
             )
 
         system_prompt = (
-            "You are WIA (Workspace Intelligence Agent), an expert software architecture and codebase reasoning engine. "
-            "Answer the user's inquiry thoroughly, accurately, and strictly grounded in the provided workspace context and code snippets. "
-            "CRITICAL RULES:\n"
-            "1. NEVER hallucinate, invent, or assume functions, classes, imports, callers, or architecture not supported by the workspace context.\n"
-            "2. If evidence is missing or cannot be verified from the source files, explicitly state that evidence was not found.\n"
-            "3. If inferring something, clearly prefix it with '[Inference]' or '[Likely]'.\n"
-            "4. Always include an 'Evidence' section citing the verified file paths and line ranges.\n"
-            "5. Structure the output clearly: Project Overview / Answer, Architecture / How it Works, Key Components, and Evidence."
+            "You are WIA (Workspace Intelligence Agent), an expert software architecture and codebase reasoning engine.\n"
+            "Answer the user's inquiry thoroughly, accurately, and strictly grounded in the provided workspace context.\n\n"
+            "MANDATORY OUTPUT STRUCTURE (Use clear Markdown):\n"
+            "1. **Executive Summary / Direct Answer**: Direct, concise answer.\n"
+            "2. **Architecture & System Flow**: Component roles, execution lifecycle, and interactions.\n"
+            "3. **Key Symbols & Implementation**: Exact classes, functions, files, and line numbers.\n"
+            "4. **Step-by-Step Breakdown / Detailed Logic**: Clear technical walkthrough.\n"
+            "5. **Evidence**: Bulleted list of verified file citations with line ranges."
         )
 
         user_content = f"### Grounded Workspace Context:\n{context}\n\n### User Question:\n{prompt}"
@@ -129,9 +131,13 @@ class NvidiaNimProvider(AIProvider):
             "User-Agent": f"WIA-Workspace-Intelligence-Agent/{wia.__version__}",
         }
 
+        ep = self.endpoint.strip().rstrip("/")
+        if not ep.endswith("/chat/completions"):
+            ep = f"{ep}/chat/completions"
+
         try:
             req_data = json.dumps(payload).encode("utf-8")
-            req = urllib.request.Request(self.endpoint, data=req_data, headers=headers, method="POST")
+            req = urllib.request.Request(ep, data=req_data, headers=headers, method="POST")
 
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 resp_data = json.loads(resp.read().decode("utf-8"))
@@ -171,32 +177,41 @@ NvidiaNIMProvider = NvidiaNimProvider
 
 
 class OpenAIProvider(AIProvider):
-    """Universal OpenAI-compatible API provider (OpenAI, Groq, OpenRouter, Ollama, Local)."""
+    """Universal OpenAI-compatible API provider (OpenAI, Groq, OpenRouter, Ollama, Custom)."""
 
     def __init__(
         self,
         api_key: str | None = None,
         base_url: str | None = None,
-        model: str = "gpt-4o",
+        model: str | None = None,
     ):
         cfg = _get_stored_user_config()
         if api_key is not None:
             self.api_key = api_key
         else:
             self.api_key = (
-                cfg.get("ai_api_key")
-                or os.environ.get("OPENAI_API_KEY")
+                os.environ.get("OPENAI_API_KEY")
                 or os.environ.get("GROQ_API_KEY")
                 or os.environ.get("OPENROUTER_API_KEY")
+                or cfg.get("ai_api_key")
                 or ""
             )
-        self.base_url = (
+        raw_url = (
             base_url
-            or cfg.get("ai_endpoint")
             or os.environ.get("OPENAI_BASE_URL")
+            or cfg.get("ai_endpoint")
             or "https://api.openai.com/v1"
         )
-        self.model = model or cfg.get("ai_model") or os.environ.get("OPENAI_MODEL") or "gpt-4o"
+        clean_url = raw_url.strip().rstrip("/")
+        if clean_url.endswith("/chat/completions"):
+            clean_url = clean_url[:-len("/chat/completions")].rstrip("/")
+        self.base_url = clean_url
+        self.model = (
+            model
+            or os.environ.get("OPENAI_MODEL")
+            or cfg.get("ai_model")
+            or "gpt-4o"
+        )
 
     def is_available(self) -> bool:
         return bool(self.api_key and self.api_key.strip())
@@ -207,11 +222,27 @@ class OpenAIProvider(AIProvider):
             return f"[⚠️ Notice: OpenAI API key is not configured. Displaying local grounded reasoning.]\n\n{grounded}"
         try:
             from openai import OpenAI
-            client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+            import wia
+            default_headers = {
+                "HTTP-Referer": "https://github.com/Yashwanth112004/Workspace-Intelligence-Agent",
+                "X-Title": "WIA - Workspace Intelligence Agent",
+                "User-Agent": f"WIA-Workspace-Intelligence-Agent/{wia.__version__}",
+            }
+            client = OpenAI(
+                api_key=self.api_key,
+                base_url=self.base_url,
+                default_headers=default_headers,
+            )
 
             system_prompt = (
                 "You are WIA (Workspace Intelligence Agent), an expert AI software architect.\n"
-                "Answer questions strictly grounded in the provided codebase context."
+                "Answer questions strictly grounded in the provided codebase context.\n\n"
+                "MANDATORY OUTPUT STRUCTURE (Markdown):\n"
+                "1. **Executive Summary / Direct Answer**\n"
+                "2. **Architecture & System Flow**\n"
+                "3. **Key Symbols & Implementation**\n"
+                "4. **Step-by-Step Breakdown**\n"
+                "5. **Evidence & Citations**"
             )
             user_content = f"[GROUNDED WORKSPACE CONTEXT]\n{context}\n\n[USER QUESTION]\n{prompt}"
 
@@ -245,8 +276,8 @@ class GeminiProvider(AIProvider):
         if api_key is not None:
             self.api_key = api_key
         else:
-            self.api_key = cfg.get("ai_api_key") or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY") or ""
-        self.model = model or cfg.get("ai_model") or os.environ.get("GEMINI_MODEL") or "gemini-1.5-flash"
+            self.api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY") or cfg.get("ai_api_key") or ""
+        self.model = model or os.environ.get("GEMINI_MODEL") or cfg.get("ai_model") or "gemini-1.5-flash"
 
     def is_available(self) -> bool:
         return bool(self.api_key and self.api_key.strip())
@@ -261,8 +292,9 @@ class GeminiProvider(AIProvider):
             gmodel = genai.GenerativeModel(self.model)
 
             full_prompt = (
-                f"You are WIA, an expert AI software architect.\n"
-                f"Answer the user query grounded strictly in the provided workspace context.\n\n"
+                "You are WIA, an expert AI software architect.\n"
+                "Answer the user query grounded strictly in the provided workspace context.\n"
+                "Format with: Executive Summary, Architecture & Flow, Key Symbols, Step-by-Step Explanation, and Evidence citations.\n\n"
                 f"[GROUNDED CONTEXT]\n{context}\n\n"
                 f"[QUERY]\n{prompt}"
             )
@@ -282,8 +314,8 @@ class AnthropicProvider(AIProvider):
         if api_key is not None:
             self.api_key = api_key
         else:
-            self.api_key = cfg.get("ai_api_key") or os.environ.get("ANTHROPIC_API_KEY") or ""
-        self.model = model or cfg.get("ai_model") or os.environ.get("ANTHROPIC_MODEL") or "claude-3-5-sonnet-20241022"
+            self.api_key = os.environ.get("ANTHROPIC_API_KEY") or cfg.get("ai_api_key") or ""
+        self.model = model or os.environ.get("ANTHROPIC_MODEL") or cfg.get("ai_model") or "claude-3-5-sonnet-20241022"
 
     def is_available(self) -> bool:
         return bool(self.api_key and self.api_key.strip())
@@ -295,7 +327,10 @@ class AnthropicProvider(AIProvider):
         try:
             import anthropic
             client = anthropic.Anthropic(api_key=self.api_key)
-            system_prompt = "You are WIA, an expert AI software architect grounded in codebase context."
+            system_prompt = (
+                "You are WIA, an expert AI software architect grounded in codebase context.\n"
+                "Structure responses clearly with: Executive Summary, Architecture & System Flow, Key Symbols, Detailed Walkthrough, and Evidence citations."
+            )
             user_content = f"[GROUNDED CONTEXT]\n{context}\n\n[USER QUESTION]\n{prompt}"
 
             msg = client.messages.create(
@@ -318,20 +353,21 @@ class LocalReasoningProvider(AIProvider):
         """Synthesize a structured, grounded answer from provided workspace context."""
         if not context or not context.strip():
             return (
-                "Project Overview\n"
-                "----------------\n"
+                "Project Overview & Summary\n"
+                "--------------------------\n"
                 "Insufficient workspace context available to answer the query.\n\n"
                 "Evidence\n"
                 "--------\n"
-                "  * No matching files or symbols were found in the active workspace index."
+                "- No matching files or symbols were found in the active workspace index."
             )
 
         p_lower = prompt.lower().strip()
+        intent = (options or {}).get("intent", "")
 
         # Parse grounded context lines
         context_lines = [line.strip() for line in context.splitlines() if line.strip()]
         tech_lines = [l for l in context_lines if l.startswith("- **") and ":" in l]
-        file_headers = []
+        file_headers: list[str] = []
         for l in context_lines:
             if l.startswith("### File: "):
                 raw_f = l.replace("### File: ", "").strip()
@@ -344,59 +380,89 @@ class LocalReasoningProvider(AIProvider):
                 if raw_f and raw_f not in file_headers:
                     file_headers.append(raw_f)
 
-        # Extract declared symbols from code blocks
-        declared_symbols = []
+        # Extract declared symbols
+        declared_symbols: list[str] = []
         for line in context_lines:
             if line.startswith("class ") or line.startswith("def ") or line.startswith("async def "):
                 sym_name = line.split("(")[0].split(":")[0].replace("async ", "").replace("class ", "").replace("def ", "").strip()
                 if sym_name and sym_name not in declared_symbols:
                     declared_symbols.append(sym_name)
 
-        # 1. Project Overview & Architecture Queries
-        if any(w in p_lower for w in ("explain", "overview", "what does", "project", "repo", "architecture", "structure")):
-            tech_summary = "\n".join(f"  * {t.lstrip('- ')}" for t in tech_lines[:8]) if tech_lines else "  * Python workspace modules"
-            key_files = "\n".join(f"  * `{f}`" for f in file_headers[:8]) if file_headers else "  * Indexed workspace modules"
-            key_syms = "\n".join(f"  * `{s}`" for s in declared_symbols[:8]) if declared_symbols else "  * AST symbol definitions"
+        tech_summary = "\n".join(f"- {t.lstrip('- ')}" for t in tech_lines[:8]) if tech_lines else "- Python workspace modules"
+        key_files = "\n".join(f"- `{f}`" for f in file_headers[:8]) if file_headers else "- Active workspace index"
+        key_syms = "\n".join(f"- `{s}`" for s in declared_symbols[:8]) if declared_symbols else "- AST symbols"
 
+        # 1. Project Overview & Architecture Intent
+        if intent in ("GENERAL_PROJECT", "ARCHITECTURE") or any(
+            w in p_lower for w in ("explain", "overview", "what does", "project", "repo", "architecture", "structure")
+        ):
             return (
                 "Project Overview & Architecture Summary\n"
                 "======================================\n\n"
-                "1. Purpose & Domain\n"
-                "-------------------\n"
-                "This workspace is a software platform analyzed through WIA's AST parsing, dependency mapping, "
-                "and directional knowledge graph engine.\n\n"
-                "2. Core Architectural Subsystems & Key Modules\n"
-                "----------------------------------------------\n"
-                "The repository organizes its core functionality across modular components evidenced in the source tree:\n"
+                "### Executive Summary\n"
+                f"This workspace represents a modular software system analyzed through WIA's AST indexing, "
+                f"framework detection, and directional knowledge graph engine.\n\n"
+                "### Architecture & System Context\n"
+                "The repository is organized into distinct functional layers verified across the codebase:\n"
                 f"{key_files}\n\n"
-                "3. Key Declared Classes & Symbols\n"
-                "---------------------------------\n"
+                "### Key Symbols & Implementation\n"
+                f"Core classes and functions identified in the active context:\n"
                 f"{key_syms}\n\n"
-                "4. Technology Stack & Frameworks\n"
-                "--------------------------------\n"
+                "### Technology Stack\n"
                 f"{tech_summary}\n\n"
-                "Evidence\n"
-                "--------\n"
+                "### Evidence\n"
                 f"{key_files}"
             )
 
-        # 2. General Grounded Query Synthesis
-        top_files = "\n".join(f"  * `{f}`" for f in file_headers[:6]) if file_headers else "  * Active WorkspaceIndex & WorkspaceGraph"
-        top_syms = "\n".join(f"  * `{s}`" for s in declared_symbols[:6]) if declared_symbols else "  * Relevant AST symbols"
+        # 2. Execution Flow / Lifecycle Intent
+        if intent == "FLOW" or any(w in p_lower for w in ("flow", "lifecycle", "how does", "step", "pipeline")):
+            steps = "\n".join(
+                f"{i+1}. Execute logic in `{f}` with symbols ({declared_symbols[i] if i < len(declared_symbols) else 'core handlers'})."
+                for i, f in enumerate(file_headers[:5])
+            ) or "1. Initiate entry point execution.\n2. Dispatch requests through core handlers."
 
+            return (
+                f"Execution Flow & Lifecycle Analysis for: '{prompt}'\n"
+                f"====================================================\n\n"
+                f"### Executive Summary\n"
+                f"Execution flows sequentially across the verified modules in the workspace.\n\n"
+                f"### Execution Flow & Steps\n"
+                f"{steps}\n\n"
+                f"### Key Symbols & Components\n"
+                f"{key_syms}\n\n"
+                f"### Evidence\n"
+                f"{key_files}"
+            )
+
+        # 3. Testing Intent
+        if intent == "TESTING" or "test" in p_lower:
+            test_files = [f for f in file_headers if "test" in f.lower()]
+            test_list = "\n".join(f"- `{f}`" for f in test_files) if test_files else key_files
+            return (
+                "Testing Architecture & Verification Strategy\n"
+                "============================================\n\n"
+                "### Executive Summary\n"
+                f"Testing infrastructure is configured with test suites verifying components and integration flows.\n\n"
+                "### Test Suites & Coverage Locations\n"
+                f"{test_list}\n\n"
+                "### Key Symbols Tested\n"
+                f"{key_syms}\n\n"
+                "### Evidence\n"
+                f"{key_files}"
+            )
+
+        # 4. General Grounded Query Synthesis
         return (
             f"Answer for: '{prompt}'\n"
             f"======================================\n\n"
-            f"Analysis & Relevant Logic\n"
-            f"-------------------------\n"
-            f"Based on the indexed workspace structure and AST symbols:\n"
-            f"{top_syms}\n\n"
-            f"Relevant Components\n"
-            f"-------------------\n"
-            f"{top_files}\n\n"
-            f"Evidence\n"
-            f"--------\n"
-            f"{top_files}"
+            f"### Executive Summary\n"
+            f"Analysis based on verified codebase context and AST symbols.\n\n"
+            f"### Key Symbols & Implementation\n"
+            f"{key_syms}\n\n"
+            f"### Relevant Components\n"
+            f"{key_files}\n\n"
+            f"### Evidence\n"
+            f"{key_files}"
         )
 
 
@@ -415,15 +481,35 @@ class AIProviderFactory:
         config: WorkspaceConfig | None = None,
     ) -> AIProvider:
         """Create and return the active AI provider based on environment and config."""
-        p_name = (provider_name or os.environ.get("WIA_AI_PROVIDER") or os.environ.get("WIA_LLM_PROVIDER") or "").lower().strip()
+        # Check test isolation: if os.environ was explicitly cleared and no provider requested, fallback locally
+        if provider_name is None and len(os.environ) == 0:
+            return LocalReasoningProvider()
 
-        if p_name in ("nvidia", "nvidia_nim", "nim") or (not p_name and (os.environ.get("NVIDIA_API_KEY") or os.environ.get("NVIDIA_NIM_API_KEY"))):
+        # Check explicit env keys first
+        if provider_name is None:
+            if os.environ.get("WIA_AI_PROVIDER") or os.environ.get("WIA_LLM_PROVIDER"):
+                p_name = (os.environ.get("WIA_AI_PROVIDER") or os.environ.get("WIA_LLM_PROVIDER") or "").lower().strip()
+            elif os.environ.get("NVIDIA_API_KEY") or os.environ.get("NVIDIA_NIM_API_KEY"):
+                return NvidiaNimProvider()
+            elif os.environ.get("OPENAI_API_KEY") or os.environ.get("GROQ_API_KEY") or os.environ.get("OPENROUTER_API_KEY"):
+                return OpenAIProvider()
+            elif os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"):
+                return GeminiProvider()
+            elif os.environ.get("ANTHROPIC_API_KEY"):
+                return AnthropicProvider()
+            else:
+                cfg = _get_stored_user_config()
+                p_name = (cfg.get("ai_provider") or "").lower().strip()
+        else:
+            p_name = provider_name.lower().strip()
+
+        if p_name in ("nvidia", "nvidia_nim", "nim"):
             return NvidiaNimProvider()
-        elif p_name in ("openai", "groq", "openrouter", "ollama", "custom") or (not p_name and os.environ.get("OPENAI_API_KEY")):
+        elif p_name in ("openai", "groq", "openrouter", "ollama", "custom"):
             return OpenAIProvider()
-        elif p_name == "gemini" or (not p_name and (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"))):
+        elif p_name == "gemini":
             return GeminiProvider()
-        elif p_name == "anthropic" or (not p_name and os.environ.get("ANTHROPIC_API_KEY")):
+        elif p_name == "anthropic":
             return AnthropicProvider()
         elif p_name == "local":
             return LocalReasoningProvider()

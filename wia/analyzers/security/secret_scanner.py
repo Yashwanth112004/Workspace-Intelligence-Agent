@@ -1,4 +1,4 @@
-"""Security analyzer for static analysis and hardcoded secret detection."""
+"""Security analyzer for static analysis and hardcoded secret detection with accelerated pre-filtering."""
 
 import re
 from dataclasses import asdict, dataclass
@@ -33,6 +33,7 @@ class SecretScanner:
             "pattern": re.compile(r"\b(AKIA[0-9A-Z]{16})\b"),
             "severity": "CRITICAL",
             "description": "Exposed AWS Access Key ID detected.",
+            "quick_trigger": "AKIA",
         },
         {
             "rule_id": "SEC-002",
@@ -40,6 +41,7 @@ class SecretScanner:
             "pattern": re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
             "severity": "CRITICAL",
             "description": "Exposed Private Key block detected.",
+            "quick_trigger": "PRIVATE KEY",
         },
         {
             "rule_id": "SEC-003",
@@ -47,6 +49,7 @@ class SecretScanner:
             "pattern": re.compile(r"\b(ghp_[A-Za-z0-9]{36})\b"),
             "severity": "HIGH",
             "description": "Exposed GitHub Personal Access Token detected.",
+            "quick_trigger": "ghp_",
         },
         {
             "rule_id": "SEC-004",
@@ -56,6 +59,7 @@ class SecretScanner:
             ),
             "severity": "HIGH",
             "description": "Hardcoded API key or credential string assignment detected.",
+            "quick_trigger": None,  # Check via general keywords
         },
         {
             "rule_id": "SEC-005",
@@ -65,8 +69,11 @@ class SecretScanner:
             ),
             "severity": "MEDIUM",
             "description": "Exposed Slack Incoming Webhook URL detected.",
+            "quick_trigger": "hooks.slack.com",
         },
     ]
+
+    GENERAL_KEYWORDS = ("api", "key", "secret", "token", "pass", "akia", "private key", "ghp_", "slack")
 
     @classmethod
     def mask_secret(cls, text: str) -> str:
@@ -111,7 +118,15 @@ class SecretScanner:
 
     @classmethod
     def scan_content(cls, content: str, file_path: str = "") -> list[SecurityFinding]:
-        """Scan string content for security rule violations."""
+        """Scan string content for security rule violations with fast substring pre-filtering."""
+        if not content:
+            return []
+
+        # Fast content-level pre-filter
+        content_lower = content.lower()
+        if not any(kw in content_lower for kw in cls.GENERAL_KEYWORDS):
+            return []
+
         findings: list[SecurityFinding] = []
 
         for line_num, line in enumerate(content.splitlines(), start=1):
@@ -119,7 +134,12 @@ class SecretScanner:
             if not line_str or (line_str.startswith("#") and "nosec" in line_str):
                 continue
 
+            line_lower = line.lower()
             for rule in cls.RULES:
+                trigger = rule.get("quick_trigger")
+                if trigger and trigger.lower() not in line_lower:
+                    continue
+
                 matches = rule["pattern"].finditer(line)
                 for match in matches:
                     raw_val = match.group(0)

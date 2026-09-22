@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from wia.constants import DEFAULT_LLM_CONTEXT_TOKEN_BUDGET
 from wia.core.architecture import ArchitectureAnalyzer
 from wia.core.framework import FrameworkDetector
 from wia.core.index_model import WorkspaceIndex
@@ -132,7 +133,7 @@ class WorkspaceRetriever:
         self,
         query: str,
         max_files: int = 15,
-        token_budget: int = 6000,
+        token_budget: int = DEFAULT_LLM_CONTEXT_TOKEN_BUDGET,
     ) -> RetrievalResult:
         """Retrieve grounded workspace evidence and formatted context for a query."""
         intent = IntentClassifier.classify(query)
@@ -288,7 +289,7 @@ class WorkspaceRetriever:
         intent: str,
         query: str,
         evidence_items: list[EvidenceItem],
-        token_budget: int = 6000,
+        token_budget: int = DEFAULT_LLM_CONTEXT_TOKEN_BUDGET,
     ) -> str:
         """Construct concise markdown context with actual source snippets and strict token budgeting."""
         lines: list[str] = []

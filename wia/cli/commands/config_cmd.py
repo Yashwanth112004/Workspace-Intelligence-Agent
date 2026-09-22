@@ -20,7 +20,7 @@ CONFIG_FILE_PATH = Path.home() / ".wia" / "config.json"
 PROVIDER_CATALOG: dict[str, dict[str, Any]] = {
     "nvidia": {
         "name": "NVIDIA NIM",
-        "default_endpoint": "https://integrate.api.nvidia.com/v1/chat/completions",
+        "default_endpoint": "https://integrate.api.nvidia.com/v1",
         "default_model": "meta/llama-3.3-70b-instruct",
         "models": [
             ("meta/llama-3.3-70b-instruct", "Llama 3.3 70B Instruct (Recommended, State-of-the-Art)"),
@@ -35,7 +35,7 @@ PROVIDER_CATALOG: dict[str, dict[str, Any]] = {
     },
     "openai": {
         "name": "OpenAI",
-        "default_endpoint": "https://api.openai.com/v1/chat/completions",
+        "default_endpoint": "https://api.openai.com/v1",
         "default_model": "gpt-4o",
         "models": [
             ("gpt-4o", "GPT-4o (Recommended, Flagship Omni Model)"),
@@ -75,7 +75,7 @@ PROVIDER_CATALOG: dict[str, dict[str, Any]] = {
     },
     "groq": {
         "name": "Groq Cloud",
-        "default_endpoint": "https://api.groq.com/openai/v1/chat/completions",
+        "default_endpoint": "https://api.groq.com/openai/v1",
         "default_model": "llama-3.3-70b-versatile",
         "models": [
             ("llama-3.3-70b-versatile", "Llama 3.3 70B Versatile (Recommended, High Throughput)"),
@@ -88,10 +88,13 @@ PROVIDER_CATALOG: dict[str, dict[str, Any]] = {
     },
     "openrouter": {
         "name": "OpenRouter",
-        "default_endpoint": "https://openrouter.ai/api/v1/chat/completions",
-        "default_model": "meta-llama/llama-3.3-70b-instruct",
+        "default_endpoint": "https://openrouter.ai/api/v1",
+        "default_model": "meta-llama/llama-3.3-70b-instruct:free",
         "models": [
-            ("meta-llama/llama-3.3-70b-instruct", "Llama 3.3 70B Instruct (Recommended)"),
+            ("meta-llama/llama-3.3-70b-instruct:free", "Llama 3.3 70B Instruct (Free Tier, Recommended)"),
+            ("nvidia/llama-3.1-nemotron-70b-instruct:free", "NVIDIA Nemotron 70B (Free Tier)"),
+            ("meta-llama/llama-3.3-70b-instruct", "Llama 3.3 70B Instruct"),
+            ("deepseek/deepseek-r1:free", "DeepSeek R1 (Free Tier)"),
             ("deepseek/deepseek-chat", "DeepSeek V3 / R1"),
             ("anthropic/claude-3.5-sonnet", "Claude 3.5 Sonnet via OpenRouter"),
         ],
@@ -101,7 +104,7 @@ PROVIDER_CATALOG: dict[str, dict[str, Any]] = {
     },
     "ollama": {
         "name": "Ollama / Local Server",
-        "default_endpoint": "http://localhost:11434/v1/chat/completions",
+        "default_endpoint": "http://localhost:11434/v1",
         "default_model": "llama3.2",
         "models": [
             ("llama3.2", "Llama 3.2 (Default Local Model)"),
@@ -115,7 +118,7 @@ PROVIDER_CATALOG: dict[str, dict[str, Any]] = {
     },
     "custom": {
         "name": "Custom OpenAI-Compatible API",
-        "default_endpoint": "http://localhost:8000/v1/chat/completions",
+        "default_endpoint": "http://localhost:8000/v1",
         "default_model": "default",
         "models": [],
         "env_var": "CUSTOM_AI_API_KEY",
@@ -203,9 +206,17 @@ def test_provider_connection(
     if not target_endpoint:
         return False, "No endpoint URL configured.", 0.0
 
+    # Ensure direct HTTP POST points to /chat/completions for chat-compatible endpoints
+    test_url = target_endpoint.strip().rstrip("/")
+    if provider_name.lower() in ("openai", "openrouter", "groq", "ollama", "custom", "nvidia") and not test_url.endswith("/chat/completions"):
+        test_url = f"{test_url}/chat/completions"
+
+    import wia
     headers = {
         "Content-Type": "application/json",
-        "User-Agent": "WIA-Workspace-Intelligence-Agent/0.1.3",
+        "User-Agent": f"WIA-Workspace-Intelligence-Agent/{wia.__version__}",
+        "HTTP-Referer": "https://github.com/Yashwanth112004/Workspace-Intelligence-Agent",
+        "X-Title": "WIA - Workspace Intelligence Agent",
     }
     if api_key:
         headers["Authorization"] = f"Bearer {api_key.strip()}"
@@ -222,8 +233,8 @@ def test_provider_connection(
     t0 = time.perf_counter()
     try:
         req_data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(target_endpoint, data=req_data, headers=headers, method="POST")
-        with urllib.request.urlopen(req, timeout=12.0) as resp:
+        req = urllib.request.Request(test_url, data=req_data, headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=15.0) as resp:
             elapsed = round(time.perf_counter() - t0, 3)
             return True, f"Connection successful (HTTP {resp.status})", elapsed
     except urllib.error.HTTPError as err:
@@ -231,7 +242,7 @@ def test_provider_connection(
         if err.code == 401:
             return False, f"Authentication Failed (HTTP 401): API key is invalid or rejected by {p_info.get('name')}.", elapsed
         elif err.code == 404 or err.code == 410:
-            return False, f"Model/Endpoint Not Found (HTTP {err.code}): Model '{target_model}' or endpoint is not available at {target_endpoint}.", elapsed
+            return False, f"Model/Endpoint Not Found (HTTP {err.code}): Model '{target_model}' or endpoint is not available at {test_url}.", elapsed
         elif err.code == 429:
             return False, f"Rate Limit Exceeded (HTTP 429): Quota or rate limit exceeded.", elapsed
         return False, f"Provider returned HTTP {err.code}: {err.reason}", elapsed
@@ -494,7 +505,7 @@ def config_cmd(
     active_model = cfg.get("ai_model") or os.environ.get("NVIDIA_MODEL") or default_m
     click.echo(format_kv("AI Model", active_model))
 
-    default_ep = PROVIDER_CATALOG.get(active_provider, {}).get("default_endpoint", "https://integrate.api.nvidia.com/v1/chat/completions")
+    default_ep = PROVIDER_CATALOG.get(active_provider, {}).get("default_endpoint", "https://integrate.api.nvidia.com/v1")
     active_endpoint = cfg.get("ai_endpoint") or os.environ.get("NVIDIA_ENDPOINT") or default_ep
     click.echo(format_kv("Endpoint", active_endpoint))
     click.echo(format_kv("Config File", str(CONFIG_FILE_PATH)))
