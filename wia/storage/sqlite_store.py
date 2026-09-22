@@ -74,6 +74,11 @@ class SQLiteStore:
                     narrative_summary TEXT
                 );
             """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_files_lang ON files(language);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_files_status ON files(indexing_status);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(symbol_name);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_symbols_path ON symbols(file_path);")
+
             # Migration check: add narrative_summary column if not present
             cursor = conn.cursor()
             b_cols = [row["name"] for row in cursor.execute("PRAGMA table_info(batches)").fetchall()]
@@ -101,43 +106,52 @@ class SQLiteStore:
             conn.execute("DELETE FROM symbols")
             conn.execute("DELETE FROM files")
 
-            # Save file records and extracted symbols
+            # Prepare batch lists for high-performance executemany insertion
+            file_rows = []
+            symbol_rows = []
+
             for rel_p, rec in index.files.items():
                 extra_json = json.dumps(rec.extra_metadata)
                 status_val = rec.indexing_status.value if hasattr(rec.indexing_status, "value") else str(rec.indexing_status)
                 batch_id = rec.extra_metadata.get("batch_id", "")
-                conn.execute(
+                file_rows.append((
+                    rec.relative_path,
+                    rec.file_size,
+                    rec.modified_time,
+                    rec.extension,
+                    rec.content_hash,
+                    rec.language,
+                    status_val,
+                    extra_json,
+                    batch_id,
+                ))
+
+                symbols = rec.extra_metadata.get("symbols", [])
+                for sym in symbols:
+                    symbol_rows.append((
+                        rec.relative_path,
+                        sym.get("name", ""),
+                        sym.get("symbol_type", ""),
+                        sym.get("line_number", 0),
+                    ))
+
+            if file_rows:
+                conn.executemany(
                     """
                     INSERT INTO files (path, file_size, modified_time, extension, content_hash, language, indexing_status, extra_metadata, batch_id)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (
-                        rec.relative_path,
-                        rec.file_size,
-                        rec.modified_time,
-                        rec.extension,
-                        rec.content_hash,
-                        rec.language,
-                        status_val,
-                        extra_json,
-                        batch_id,
-                    ),
+                    file_rows,
                 )
 
-                symbols = rec.extra_metadata.get("symbols", [])
-                for sym in symbols:
-                    conn.execute(
-                        """
-                        INSERT INTO symbols (file_path, symbol_name, symbol_type, line_number)
-                        VALUES (?, ?, ?, ?)
-                        """,
-                        (
-                            rec.relative_path,
-                            sym.get("name", ""),
-                            sym.get("symbol_type", ""),
-                            sym.get("line_number", 0),
-                        ),
-                    )
+            if symbol_rows:
+                conn.executemany(
+                    """
+                    INSERT INTO symbols (file_path, symbol_name, symbol_type, line_number)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    symbol_rows,
+                )
 
             # Save batch records
             conn.execute("DELETE FROM batches")

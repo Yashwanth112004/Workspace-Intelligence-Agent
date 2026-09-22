@@ -26,6 +26,18 @@ class SymbolNode:
         return asdict(self)
 
 
+# Precompiled regular expressions for multi-language fallback parsing
+CLASS_PATTERN = re.compile(
+    r"^\s*(?:export\s+|public\s+|private\s+|protected\s+)?(?:class|struct|interface|trait|type)\s+([A-Za-z0-9_]+)(?:\s+(?:extends|implements|<|:)\s*([A-Za-z0-9_\.]+))?"
+)
+FUNC_PATTERN = re.compile(
+    r"^\s*(?:async\s+)?(?:export\s+|public\s+|private\s+|protected\s+|static\s+)*(?:def|function|fn|func|const|let|var)\s+([A-Za-z0-9_]+)"
+)
+IMPORT_PATTERN = re.compile(
+    r"^\s*(?:import|from|use|require|include)\s+([A-Za-z0-9_\./\-]+)"
+)
+
+
 class ASTParser:
     """Parses source files into structural AST symbol nodes."""
 
@@ -156,14 +168,8 @@ class ASTParser:
         symbols: list[SymbolNode] = []
         lines = content.splitlines()
 
-        class_pattern = re.compile(r"^\s*(?:export\s+)?class\s+([A-Za-z0-9_]+)(?:\s+extends\s+([A-Za-z0-9_]+))?")
-        func_pattern = re.compile(
-            r"^\s*(?:async\s+)?(?:export\s+)?(?:def|function|const|let|var)\s+([A-Za-z0-9_]+)"
-        )
-        import_pattern = re.compile(r"^\s*(?:import|from)\s+([A-Za-z0-9_\./\-]+)")
-
         for idx, line in enumerate(lines, start=1):
-            class_match = class_pattern.search(line)
+            class_match = CLASS_PATTERN.search(line)
             if class_match:
                 bases = [class_match.group(2)] if class_match.group(2) else []
                 symbols.append(
@@ -177,7 +183,7 @@ class ASTParser:
                 )
                 continue
 
-            func_match = func_pattern.search(line)
+            func_match = FUNC_PATTERN.search(line)
             if func_match:
                 symbols.append(
                     SymbolNode(
@@ -189,7 +195,7 @@ class ASTParser:
                 )
                 continue
 
-            import_match = import_pattern.search(line)
+            import_match = IMPORT_PATTERN.search(line)
             if import_match:
                 symbols.append(
                     SymbolNode(

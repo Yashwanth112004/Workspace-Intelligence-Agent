@@ -30,6 +30,9 @@ class DependencyItem:
         return asdict(self)
 
 
+REQUIREMENT_SPEC_PATTERN = re.compile(r"^\s*([A-Za-z0-9_\-\.]+)\s*([<>=!~^].*)?")
+
+
 class ManifestParser:
     """Parses project manifests for dependencies across Python, Node, Cargo, and Go."""
 
@@ -37,8 +40,7 @@ class ManifestParser:
     def _parse_requirement_spec(cls, spec_str: str) -> tuple[str, str]:
         """Extract normalized package name and version constraint from a dependency spec string."""
         clean_str = spec_str.split(";")[0].strip()  # Strip environment markers
-        pattern = re.compile(r"^\s*([A-Za-z0-9_\-\.]+)\s*([<>=!~^].*)?")
-        match = pattern.match(clean_str)
+        match = REQUIREMENT_SPEC_PATTERN.match(clean_str)
         if match:
             pkg_name = match.group(1).lower()
             ver_spec = match.group(2).strip() if match.group(2) else "*"
@@ -217,42 +219,53 @@ class ManifestParser:
 
     @classmethod
     def parse_workspace_manifests(cls, workspace_path: str | Path) -> list[DependencyItem]:
-        """Discover and parse all project manifest files in workspace."""
+        """Discover and parse all project manifest files in workspace in a single traversal pass."""
+        import os
         path = Path(workspace_path)
         items: list[DependencyItem] = []
-        ignored_parts = {".wia", ".git", "node_modules", "venv", ".venv", ".pytest_cache", "__pycache__", "build", "dist"}
+        ignored_dirs = {
+            ".wia", ".git", "node_modules", "venv", ".venv", ".pytest_cache",
+            "__pycache__", "build", "dist", ".tox", ".mypy_cache"
+        }
 
-        # 1. Look for pyproject.toml
-        for pyproj_file in path.rglob("pyproject.toml"):
-            if any(part in ignored_parts or part.endswith(".egg-info") or part.endswith(".dist-info") for part in pyproj_file.parts):
-                continue
-            try:
-                content = pyproj_file.read_text(encoding="utf-8", errors="ignore")
-                rel_p = str(pyproj_file.relative_to(path)).replace("\\", "/")
-                items.extend(cls.parse_pyproject_toml(content, manifest_path=rel_p))
-            except Exception:
-                pass
+        for root, dirs, files in os.walk(str(path)):
+            # Prune ignored directory trees in-place
+            dirs[:] = [
+                d for d in dirs
+                if d not in ignored_dirs and not d.endswith(".egg-info") and not d.endswith(".dist-info")
+            ]
 
-        # 2. Look for requirements.txt
-        for req_file in path.rglob("requirements*.txt"):
-            if any(part in ignored_parts or part.endswith(".egg-info") or part.endswith(".dist-info") for part in req_file.parts):
-                continue
-            try:
-                content = req_file.read_text(encoding="utf-8", errors="ignore")
-                rel_p = str(req_file.relative_to(path)).replace("\\", "/")
-                items.extend(cls.parse_requirements_txt(content, manifest_path=rel_p))
-            except Exception:
-                pass
+            root_path = Path(root)
 
-        # 3. Look for package.json
-        for pkg_file in path.rglob("package.json"):
-            if any(part in ignored_parts for part in pkg_file.parts):
-                continue
-            try:
-                content = pkg_file.read_text(encoding="utf-8", errors="ignore")
-                rel_p = str(pkg_file.relative_to(path)).replace("\\", "/")
-                items.extend(cls.parse_package_json(content, manifest_path=rel_p))
-            except Exception:
-                pass
+            # 1. Look for pyproject.toml
+            if "pyproject.toml" in files:
+                pyproj_file = root_path / "pyproject.toml"
+                try:
+                    content = pyproj_file.read_text(encoding="utf-8", errors="ignore")
+                    rel_p = str(pyproj_file.relative_to(path)).replace("\\", "/")
+                    items.extend(cls.parse_pyproject_toml(content, manifest_path=rel_p))
+                except Exception:
+                    pass
+
+            # 2. Look for requirements*.txt
+            for f in files:
+                if f.startswith("requirements") and f.endswith(".txt"):
+                    req_file = root_path / f
+                    try:
+                        content = req_file.read_text(encoding="utf-8", errors="ignore")
+                        rel_p = str(req_file.relative_to(path)).replace("\\", "/")
+                        items.extend(cls.parse_requirements_txt(content, manifest_path=rel_p))
+                    except Exception:
+                        pass
+
+            # 3. Look for package.json
+            if "package.json" in files:
+                pkg_file = root_path / "package.json"
+                try:
+                    content = pkg_file.read_text(encoding="utf-8", errors="ignore")
+                    rel_p = str(pkg_file.relative_to(path)).replace("\\", "/")
+                    items.extend(cls.parse_package_json(content, manifest_path=rel_p))
+                except Exception:
+                    pass
 
         return items

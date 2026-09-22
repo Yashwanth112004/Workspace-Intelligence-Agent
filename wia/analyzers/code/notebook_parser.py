@@ -9,6 +9,9 @@ from typing import Any
 from wia.analyzers.code.ast_parser import ASTParser, SymbolNode
 
 
+PATH_REF_PATTERN = re.compile(r"[\w\-\./]+\.(?:py|json|csv|txt|md|yml|yaml|png|jpg)")
+
+
 @dataclass
 class NotebookCell:
     """Represents a single cell in a Jupyter notebook."""
@@ -160,7 +163,7 @@ class NotebookParser:
                 exec_flow.append(step_label)
 
             # Check for file path references in code or markdown
-            for match in re.findall(r"[\w\-\./]+\.(?:py|json|csv|txt|md|yml|yaml|png|jpg)", source_text):
+            for match in PATH_REF_PATTERN.findall(source_text):
                 if not match.startswith("http") and "/" in match or "." in match:
                     ws_refs.add(match)
 

@@ -165,30 +165,19 @@ class WorkspaceRetriever:
         target_files: set[str],
         max_files: int = 15,
     ) -> None:
-        """Retrieve foundational project-level architectural files, manifests, entrypoints, and tests."""
-        # 1. Manifests & Configs
-        for p, rec in self.index.files.items():
-            if rec.file_type in ("Build", "CI/CD", "Configuration"):
-                target_files.add(p)
-                evidence_items.append(
-                    EvidenceItem(
-                        file_path=p,
-                        description=f"{rec.file_type} manifest defining workspace metadata/build rules.",
-                    )
-                )
-
-        # 2. Main Entry Points & Core Modules
+        """Retrieve foundational project-level architectural files, entrypoints, and core modules."""
+        # 1. Main Entry Points & Execution Roots FIRST
         arch = ArchitectureAnalyzer.analyze_workspace(self.index)
         for ep in arch.entry_points[:6]:
             clean_ep = ep.strip("`").split(" -> ")[0].strip("`")
             for p in self.index.files:
-                if clean_ep in p or Path(p).stem == clean_ep:
+                if (clean_ep in p or Path(p).stem == clean_ep) and p not in target_files:
                     target_files.add(p)
                     evidence_items.append(
                         EvidenceItem(file_path=p, description=f"Entry point identified: {ep}")
                     )
 
-        # 3. Core Source Files (by symbol density / connectivity)
+        # 2. Core Source Files (ranked by symbol density and connectivity)
         ranked_files = sorted(
             [
                 (p, r)
@@ -200,7 +189,7 @@ class WorkspaceRetriever:
         )
 
         for p, rec in ranked_files:
-            if len(target_files) >= max_files:
+            if len(target_files) >= max_files - 2:
                 break
             if p not in target_files:
                 target_files.add(p)
@@ -208,6 +197,20 @@ class WorkspaceRetriever:
                 sym_names = ", ".join(s.get("name", "") for s in syms[:4] if s.get("name"))
                 desc = f"Core module defining {len(syms)} symbols ({sym_names})" if sym_names else "Core module"
                 evidence_items.append(EvidenceItem(file_path=p, description=desc))
+
+        # 3. Top Manifests & Configs (pyproject.toml, package.json, docker-compose.yml)
+        key_manifest_names = {"pyproject.toml", "package.json", "docker-compose.yml", "cargo.toml", "go.mod"}
+        for p, rec in self.index.files.items():
+            if len(target_files) >= max_files:
+                break
+            if (Path(p).name.lower() in key_manifest_names or rec.file_type == "Build") and p not in target_files:
+                target_files.add(p)
+                evidence_items.append(
+                    EvidenceItem(
+                        file_path=p,
+                        description=f"{rec.file_type} manifest defining workspace metadata/build rules.",
+                    )
+                )
 
     def _retrieve_targeted(
         self,
@@ -336,6 +339,11 @@ class WorkspaceRetriever:
             ev_header = f"### File: `{ev.file_path}`"
             if ev.symbol_name:
                 ev_header += f" (Symbol: `{ev.symbol_name}`)"
+            elif ev.file_path in self.index.files:
+                syms = self.index.files[ev.file_path].extra_metadata.get("symbols", [])
+                sym_names = [s.get("name") for s in syms if s.get("name") and s.get("symbol_type") in ("class", "function")][:4]
+                if sym_names:
+                    ev_header += f" (Defines: {', '.join(sym_names)})"
             if ev.description:
                 ev_header += f" — {ev.description}"
 
