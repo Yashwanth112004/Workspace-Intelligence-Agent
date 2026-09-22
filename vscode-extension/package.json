@@ -1,8 +1,8 @@
 {
   "name": "wia-vscode",
   "displayName": "Workspace Intelligence Agent (WIA)",
-  "description": "AI-Powered Code Intelligence, Architecture Map, Symbol Impact CodeLens, and AST Explorer for VS Code",
-  "version": "0.1.1",
+  "description": "AI-Powered Code Intelligence, Architecture Map, Symbol Impact CodeLens, and Laya Decision Agent for VS Code",
+  "version": "0.1.6",
   "publisher": "wia-agent",
   "engines": {
     "vscode": "^1.80.0"
@@ -19,7 +19,8 @@
     "refactoring",
     "impact analysis",
     "ast",
-    "agent"
+    "agent",
+    "laya"
   ],
   "main": "./out/extension.js",
   "icon": "resources/icon.png",
@@ -58,13 +59,33 @@
     },
     "commands": [
       {
+        "command": "wia.openAgent",
+        "title": "WIA: Open Workspace Intelligence Agent",
+        "category": "WIA"
+      },
+      {
         "command": "wia.scanWorkspace",
         "title": "WIA: Scan & Ingest Workspace",
         "category": "WIA"
       },
       {
         "command": "wia.openChat",
-        "title": "WIA: Open AI Chat Assistant",
+        "title": "WIA: Open AI Agent Chat",
+        "category": "WIA"
+      },
+      {
+        "command": "wia.fixEnvironment",
+        "title": "WIA: Repair Environment & Dependencies",
+        "category": "WIA"
+      },
+      {
+        "command": "wia.runProject",
+        "title": "WIA: Run Project Development Server",
+        "category": "WIA"
+      },
+      {
+        "command": "wia.runTests",
+        "title": "WIA: Run Workspace Test Suite",
         "category": "WIA"
       },
       {
@@ -78,28 +99,8 @@
         "category": "WIA"
       },
       {
-        "command": "wia.traceFlow",
-        "title": "WIA: Trace Code Execution Flow",
-        "category": "WIA"
-      },
-      {
-        "command": "wia.analyzeImpact",
-        "title": "WIA: Analyze Change Impact",
-        "category": "WIA"
-      },
-      {
         "command": "wia.showImpactPanel",
         "title": "WIA: Open Change Impact Inspector",
-        "category": "WIA"
-      },
-      {
-        "command": "wia.exportOkf",
-        "title": "WIA: Export Open Knowledge Format (.wia/knowledge/)",
-        "category": "WIA"
-      },
-      {
-        "command": "wia.startDaemon",
-        "title": "WIA: Start Local Intelligence Daemon",
         "category": "WIA"
       },
       {
@@ -107,11 +108,6 @@
         "title": "WIA: Refresh Knowledge Views",
         "category": "WIA",
         "icon": "$(refresh)"
-      },
-      {
-        "command": "wia.checkHealthStatus",
-        "title": "WIA: Check Daemon Health Status",
-        "category": "WIA"
       }
     ],
     "menus": {
@@ -123,10 +119,6 @@
         {
           "command": "wia.explainArchitecture",
           "group": "wia@2"
-        },
-        {
-          "command": "wia.traceFlow",
-          "group": "wia@3"
         }
       ],
       "view/title": [
@@ -145,6 +137,17 @@
     "configuration": {
       "title": "Workspace Intelligence Agent",
       "properties": {
+        "wia.provider": {
+          "type": "string",
+          "default": "nvidia",
+          "enum": ["nvidia", "openai", "anthropic", "gemini", "local"],
+          "description": "AI reasoning provider used for WIA explanations"
+        },
+        "wia.model": {
+          "type": "string",
+          "default": "meta/llama-3.1-70b-instruct",
+          "description": "Model identifier for AI reasoning"
+        },
         "wia.apiBaseUrl": {
           "type": "string",
           "default": "http://127.0.0.1:8000",

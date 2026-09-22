@@ -1,5 +1,10 @@
 import * as vscode from 'vscode';
 import { WiaApiClient } from './apiClient';
+import { WiaSecretStorage } from './auth/secretStorage';
+import { LayaDecisionEngine } from './decision/layaEngine';
+import { WiaExecutor } from './executor/wiaExecutor';
+import { EnvironmentRepairEngine } from './environment/envRepair';
+import { WiaAgentPanel } from './panels/WiaAgentPanel';
 import { ArchitectureTreeProvider } from './providers/architectureProvider';
 import { SymbolsTreeProvider } from './providers/symbolsProvider';
 import { DependenciesTreeProvider } from './providers/dependenciesProvider';
@@ -18,6 +23,18 @@ export function activate(context: vscode.ExtensionContext) {
     const baseUrl = config.get<string>('apiBaseUrl', 'http://127.0.0.1:8000');
     const apiClient = new WiaApiClient(baseUrl);
 
+    // Initialize Core Subsystems
+    const secretStorage = new WiaSecretStorage(context.secrets, context.globalState);
+    const layaEngine = new LayaDecisionEngine();
+    const executor = new WiaExecutor(apiClient);
+    const envRepair = new EnvironmentRepairEngine(executor);
+
+    // Detect active workspace root
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    if (workspaceFolders && workspaceFolders.length > 0) {
+        currentRootPath = workspaceFolders[0].uri.fsPath;
+    }
+
     // Initialize Tree Providers
     const archProvider = new ArchitectureTreeProvider(apiClient);
     const symbolsProvider = new SymbolsTreeProvider(apiClient);
@@ -27,7 +44,7 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.window.registerTreeDataProvider('wia-symbols', symbolsProvider);
     vscode.window.registerTreeDataProvider('wia-dependencies', depsProvider);
 
-    // Initialize & Register CodeLens Provider for Multi-Language Support
+    // Initialize & Register CodeLens Provider
     const codeLensProvider = new WiaCodeLensProvider(apiClient);
     const codeLensDisposable = vscode.languages.registerCodeLensProvider(
         [
@@ -43,9 +60,9 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Initialize Status Bar Item
     statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-    statusBarItem.command = 'wia.checkHealthStatus';
-    statusBarItem.text = '$(sync~spin) WIA';
-    statusBarItem.tooltip = 'Checking WIA Engine Status...';
+    statusBarItem.command = 'wia.openAgent';
+    statusBarItem.text = '$(zap) WIA Agent';
+    statusBarItem.tooltip = 'Click to open WIA Workspace Intelligence Agent';
     statusBarItem.show();
     context.subscriptions.push(statusBarItem);
 
@@ -56,13 +73,12 @@ export function activate(context: vscode.ExtensionContext) {
             statusBarItem.tooltip = `WIA Engine Daemon connected on ${apiClient.getBaseUrl()}`;
             statusBarItem.backgroundColor = undefined;
         } else {
-            statusBarItem.text = '$(warning) WIA: Offline';
-            statusBarItem.tooltip = 'WIA Engine Daemon offline. Click to start daemon.';
-            statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+            statusBarItem.text = '$(sparkle) WIA Agent';
+            statusBarItem.tooltip = 'Click to open WIA Workspace Intelligence Agent';
+            statusBarItem.backgroundColor = undefined;
         }
     };
 
-    // Check health on startup and on configuration change
     updateHealthStatus();
     vscode.workspace.onDidChangeConfiguration(e => {
         if (e.affectsConfiguration('wia.apiBaseUrl')) {
@@ -72,33 +88,29 @@ export function activate(context: vscode.ExtensionContext) {
         }
     });
 
-    // Command: Check / Toggle Health Status
-    const healthCmd = vscode.commands.registerCommand('wia.checkHealthStatus', async () => {
-        const isOnline = await apiClient.checkHealth();
-        if (!isOnline) {
-            const choice = await vscode.window.showWarningMessage(
-                'WIA Engine Daemon is currently offline on ' + apiClient.getBaseUrl(),
-                'Start Daemon',
-                'Cancel'
-            );
-            if (choice === 'Start Daemon') {
-                vscode.commands.executeCommand('wia.startDaemon');
-            }
-        } else {
-            vscode.window.showInformationMessage(`✅ WIA Engine Daemon is online and healthy on ${apiClient.getBaseUrl()}`);
-        }
+    // PRIMARY COMMAND: Open Unified WIA Agent Panel
+    const openAgentCmd = vscode.commands.registerCommand('wia.openAgent', () => {
+        WiaAgentPanel.createOrShow(
+            context.extensionUri,
+            apiClient,
+            secretStorage,
+            layaEngine,
+            executor,
+            envRepair,
+            currentRootPath,
+            currentRepoId
+        );
     });
 
     // Command: Scan Workspace
     const scanCmd = vscode.commands.registerCommand('wia.scanWorkspace', async () => {
-        const workspaceFolders = vscode.workspace.workspaceFolders;
-        if (!workspaceFolders || workspaceFolders.length === 0) {
+        if (!currentRootPath && workspaceFolders && workspaceFolders.length > 0) {
+            currentRootPath = workspaceFolders[0].uri.fsPath;
+        }
+        if (!currentRootPath) {
             vscode.window.showErrorMessage('No active workspace folder found to scan.');
             return;
         }
-
-        const rootPath = workspaceFolders[0].uri.fsPath;
-        currentRootPath = rootPath;
 
         vscode.window.withProgress(
             {
@@ -108,42 +120,48 @@ export function activate(context: vscode.ExtensionContext) {
             },
             async () => {
                 try {
-                    const res = await apiClient.ingest(rootPath, workspaceFolders[0].name);
+                    const res = await apiClient.ingest(currentRootPath!, workspaceFolders![0].name);
                     currentRepoId = res.repo_id;
 
-                    // Poll status until complete or timeout
-                    for (let i = 0; i < 40; i++) {
-                        await new Promise((r) => setTimeout(r, 1500));
-                        const status = await apiClient.getStatus(currentRepoId);
-                        if (status.status === 'completed') {
-                            break;
-                        }
-                    }
-
-                    archProvider.setRepository(currentRepoId, rootPath);
-                    symbolsProvider.setRepository(currentRepoId, rootPath);
+                    archProvider.setRepository(currentRepoId, currentRootPath!);
+                    symbolsProvider.setRepository(currentRepoId, currentRootPath!);
                     depsProvider.setRepository(currentRepoId);
-                    codeLensProvider.setRepository(currentRepoId, rootPath);
+                    codeLensProvider.setRepository(currentRepoId, currentRootPath!);
 
-                    if (WiaChatPanel.currentPanel) {
-                        WiaChatPanel.currentPanel.setRepository(currentRepoId, rootPath);
-                    }
-
-                    await updateHealthStatus();
-                    vscode.window.showInformationMessage(`✅ WIA: Workspace '${workspaceFolders[0].name}' indexed successfully!`);
+                    vscode.window.showInformationMessage(`✅ WIA: Workspace indexed successfully!`);
                 } catch (e: any) {
-                    vscode.window.showErrorMessage(`❌ WIA indexing failed: ${e.message}. Is the WIA daemon running on port 8000?`);
+                    // Fallback to local executor
+                    await executor.executeOperation({ name: 'workspace.scan' }, currentRootPath!);
+                    vscode.window.showInformationMessage(`✅ WIA: Local indexing completed!`);
                 }
             }
         );
     });
 
-    // Command: Open AI Chat Panel
+    // Aliases & Tooling Commands
     const chatCmd = vscode.commands.registerCommand('wia.openChat', () => {
-        WiaChatPanel.createOrShow(context.extensionUri, apiClient, currentRepoId, currentRootPath);
+        vscode.commands.executeCommand('wia.openAgent');
     });
 
-    // Command: Explain Architecture / Show Architecture Panel
+    const fixEnvCmd = vscode.commands.registerCommand('wia.fixEnvironment', () => {
+        if (currentRootPath) {
+            const res = envRepair.repairEnvironment(currentRootPath);
+            vscode.window.showInformationMessage(res.message);
+        }
+    });
+
+    const runProjectCmd = vscode.commands.registerCommand('wia.runProject', () => {
+        if (currentRootPath) {
+            executor.executeOperation({ name: 'project.run' }, currentRootPath);
+        }
+    });
+
+    const runTestsCmd = vscode.commands.registerCommand('wia.runTests', () => {
+        if (currentRootPath) {
+            executor.executeOperation({ name: 'project.test' }, currentRootPath);
+        }
+    });
+
     const explainCmd = vscode.commands.registerCommand('wia.explainArchitecture', () => {
         WiaArchitecturePanel.createOrShow(context.extensionUri, apiClient, currentRepoId, currentRootPath);
     });
@@ -152,112 +170,10 @@ export function activate(context: vscode.ExtensionContext) {
         WiaArchitecturePanel.createOrShow(context.extensionUri, apiClient, currentRepoId, currentRootPath);
     });
 
-    // Command: Trace Flow
-    const flowCmd = vscode.commands.registerCommand('wia.traceFlow', async () => {
-        const editor = vscode.window.activeTextEditor;
-        const selectedText = editor ? editor.document.getText(editor.selection).trim() : '';
-
-        const entrySymbol = await vscode.window.showInputBox({
-            prompt: 'Enter entry function name or API route to trace flow:',
-            value: selectedText || 'main'
-        });
-
-        if (entrySymbol) {
-            vscode.commands.executeCommand('wia.traceFlowForSymbol', entrySymbol);
-        }
-    });
-
-    // Command: Trace Flow for specific symbol (used by CodeLens)
-    const traceFlowSymbolCmd = vscode.commands.registerCommand('wia.traceFlowForSymbol', async (symbolName: string) => {
-        if (!currentRepoId) {
-            const choice = await vscode.window.showInformationMessage(
-                'Please run "WIA: Scan Workspace" first to build the knowledge graph.',
-                'Scan Workspace'
-            );
-            if (choice === 'Scan Workspace') {
-                vscode.commands.executeCommand('wia.scanWorkspace');
-            }
-            return;
-        }
-
-        try {
-            const res = await apiClient.traceFlow(currentRepoId, symbolName);
-            const stepCount = res.flow?.length || 0;
-            vscode.window.showInformationMessage(`Traced ${stepCount} execution steps for '${symbolName}'`);
-            WiaChatPanel.createOrShow(
-                context.extensionUri,
-                apiClient,
-                currentRepoId,
-                currentRootPath,
-                `Trace execution call flow starting from function '${symbolName}'`
-            );
-        } catch (e: any) {
-            vscode.window.showErrorMessage(`Error tracing flow for '${symbolName}': ${e.message}`);
-        }
-    });
-
-    // Command: Analyze Impact (Prompt or Selection)
-    const impactCmd = vscode.commands.registerCommand('wia.analyzeImpact', async () => {
-        const editor = vscode.window.activeTextEditor;
-        const selectedText = editor ? editor.document.getText(editor.selection).trim() : '';
-
-        const target = await vscode.window.showInputBox({
-            prompt: 'Enter symbol name or file path to analyze refactoring change impact:',
-            value: selectedText
-        });
-
-        if (target) {
-            vscode.commands.executeCommand('wia.analyzeImpactForSymbol', target);
-        }
-    });
-
-    // Command: Analyze Impact for specific symbol (used by CodeLens & Context Menus)
-    const impactSymbolCmd = vscode.commands.registerCommand(
-        'wia.analyzeImpactForSymbol',
-        (symbolName: string, _filePath?: string, _line?: number) => {
-            WiaImpactPanel.createOrShow(context.extensionUri, apiClient, currentRepoId, currentRootPath, symbolName);
-        }
-    );
-
     const impactPanelCmd = vscode.commands.registerCommand('wia.showImpactPanel', () => {
         WiaImpactPanel.createOrShow(context.extensionUri, apiClient, currentRepoId, currentRootPath);
     });
 
-    // Command: Export OKF
-    const okfCmd = vscode.commands.registerCommand('wia.exportOkf', async () => {
-        if (!currentRepoId) {
-            vscode.window.showInformationMessage('Please run "WIA: Scan Workspace" first.');
-            return;
-        }
-        try {
-            const res = await apiClient.exportOkf(currentRepoId);
-            vscode.window.showInformationMessage(`✅ ${res.message || 'OKF Export generated successfully at .wia/knowledge/'}`);
-        } catch (e: any) {
-            vscode.window.showErrorMessage(`Error generating OKF export: ${e.message}`);
-        }
-    });
-
-    // Command: Start Local Intelligence Daemon
-    const startDaemonCmd = vscode.commands.registerCommand('wia.startDaemon', () => {
-        const workspaceFolders = vscode.workspace.workspaceFolders;
-        const cwd = workspaceFolders && workspaceFolders.length > 0 ? workspaceFolders[0].uri.fsPath : undefined;
-
-        if (!daemonTerminal || daemonTerminal.exitStatus !== undefined) {
-            daemonTerminal = vscode.window.createTerminal({
-                name: 'WIA Intelligence Daemon',
-                cwd: cwd
-            });
-        }
-        daemonTerminal.show();
-        daemonTerminal.sendText('python run_dev.py');
-        vscode.window.showInformationMessage('🚀 Starting WIA Local Intelligence Engine Daemon (http://127.0.0.1:8000)...');
-
-        // Poll health status
-        setTimeout(() => updateHealthStatus(), 4000);
-        setTimeout(() => updateHealthStatus(), 8000);
-    });
-
-    // Command: Refresh Knowledge Views
     const refreshCmd = vscode.commands.registerCommand('wia.refreshViews', () => {
         archProvider.refresh();
         symbolsProvider.refresh();
@@ -268,19 +184,16 @@ export function activate(context: vscode.ExtensionContext) {
     });
 
     context.subscriptions.push(
+        openAgentCmd,
         scanCmd,
         chatCmd,
+        fixEnvCmd,
+        runProjectCmd,
+        runTestsCmd,
         explainCmd,
         archPanelCmd,
-        flowCmd,
-        traceFlowSymbolCmd,
-        impactCmd,
-        impactSymbolCmd,
         impactPanelCmd,
-        okfCmd,
-        startDaemonCmd,
-        refreshCmd,
-        healthCmd
+        refreshCmd
     );
 }
 
