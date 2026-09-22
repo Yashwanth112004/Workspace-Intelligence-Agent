@@ -1,5 +1,5 @@
 {
-  "name": "wia-vscode",
+  "name": "wia-agent",
   "displayName": "Workspace Intelligence Agent (WIA)",
   "description": "AI-Powered Code Intelligence, Architecture Map, Symbol Impact CodeLens, and Laya Decision Agent for VS Code",
   "version": "0.1.6",

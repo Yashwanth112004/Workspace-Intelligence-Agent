@@ -5,4 +5,4 @@ tsconfig.json
 **/*.map
 .gitignore
 node_modules/**
-wia-vscode-*.vsix
+*.vsix
