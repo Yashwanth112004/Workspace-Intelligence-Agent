@@ -4,7 +4,7 @@
 [![Package](https://img.shields.io/badge/PyPI-wia--agent-orange.svg)](https://pypi.org/project/wia-agent/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/Tests-185%20Passed-brightgreen.svg)](#-testing)
-[![Version](https://img.shields.io/badge/Version-v0.1.5-blue.svg)](pyproject.toml)
+[![Version](https://img.shields.io/badge/Version-v0.1.6-blue.svg)](pyproject.toml)
 
 **Workspace Intelligence Agent (WIA)** is a high-performance, graph-grounded workspace intelligence platform and codebase reasoning engine. It builds a deep, structured understanding of software repositories by parsing Abstract Syntax Trees (AST), building entity relationship graphs, processing Jupyter notebooks, and grounding AI reasoning in verified codebase evidence.
 
