@@ -3,6 +3,8 @@ import logging
 from sqlmodel import SQLModel, create_engine, Session
 from app.core.config import settings
 
+from sqlalchemy import event
+
 logger = logging.getLogger("wia.database")
 
 def get_engine():
@@ -22,7 +24,21 @@ def get_engine():
     sqlite_file = os.path.join(settings.DATA_DIR, "wia.db")
     sqlite_url = f"sqlite:///{sqlite_file}"
     logger.info(f"Using SQLite database at {sqlite_url}")
-    return create_engine(sqlite_url, echo=False, connect_args={"check_same_thread": False})
+    eng = create_engine(sqlite_url, echo=False, connect_args={"check_same_thread": False, "timeout": 30})
+    
+    # Enable WAL mode and performance PRAGMAs on every SQLite connection
+    @event.listens_for(eng, "connect")
+    def _set_sqlite_pragmas(dbapi_connection, connection_record):
+        try:
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA synchronous=NORMAL")
+            cursor.execute("PRAGMA busy_timeout=5000")
+            cursor.close()
+        except Exception:
+            pass
+
+    return eng
 
 engine = get_engine()
 
