@@ -51,33 +51,22 @@ class ImpactAnalyzer:
         file_node: GraphNode | None = None
         symbol_nodes: list[GraphNode] = []
 
-        # 1. Exact file_id or exact file_path match
-        for node in graph.nodes.values():
-            if node.node_type == "file" and (
-                node.file_path == target_norm or node.node_id == f"file:{target_norm}"
-            ):
-                file_node = node
-                break
+        # 1. Direct O(1) file_id lookup
+        direct_file_id = f"file:{target_norm}"
+        if direct_file_id in graph.nodes and graph.nodes[direct_file_id].node_type == "file":
+            file_node = graph.nodes[direct_file_id]
 
-        # 2. File path ending or filename match
+        # 2. Single-pass candidate collection if not directly resolved
         if not file_node:
-            for node in graph.nodes.values():
-                if node.node_type == "file" and (
-                    node.file_path.endswith("/" + target_norm)
-                    or Path(node.file_path).name == target_norm
-                ):
-                    file_node = node
-                    break
-
-        # 3. Search for matching symbol nodes if not a file
-        if not file_node:
-            for node in graph.nodes.values():
-                if node.node_type != "file" and (
-                    node.name == symbol_name or f":{symbol_name}" in node.node_id
-                ):
+            for node_id, node in graph.nodes.items():
+                if node.node_type == "file":
+                    if node.file_path == target_norm or node.file_path.endswith("/" + target_norm) or Path(node.file_path).name == target_norm:
+                        file_node = node
+                        break
+                elif node.name == symbol_name or f":{symbol_name}" in node_id:
                     symbol_nodes.append(node)
 
-        # 4. Fallback search by substring if no exact match
+        # 3. Fallback search by substring if no exact match
         if not file_node and not symbol_nodes:
             matches = graph.find_nodes_by_name(symbol_name)
             for m in matches:
