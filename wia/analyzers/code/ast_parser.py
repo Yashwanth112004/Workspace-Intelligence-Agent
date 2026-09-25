@@ -29,6 +29,11 @@ class SymbolNode:
 class ASTParser:
     """Parses source files into structural AST symbol nodes."""
 
+    # Precompiled regex patterns for multi-language fallback parsing
+    _RE_CLASS = re.compile(r"^\s*(?:export\s+)?class\s+([A-Za-z0-9_]+)(?:\s+extends\s+([A-Za-z0-9_]+))?")
+    _RE_FUNC = re.compile(r"^\s*(?:async\s+)?(?:export\s+)?(?:def|function|const|let|var)\s+([A-Za-z0-9_]+)")
+    _RE_IMPORT = re.compile(r"^\s*(?:import|from)\s+([A-Za-z0-9_\./\-]+)")
+
     @classmethod
     def _extract_decorator_name(cls, dec_node: ast.AST) -> str:
         """Extract name string from decorator node."""
@@ -53,7 +58,7 @@ class ASTParser:
 
     @classmethod
     def parse_python_content(cls, content: str) -> list[SymbolNode]:
-        """Parse Python source code using built-in `ast` module."""
+        """Parse Python source code using built-in `ast` module with optimized traversal."""
         symbols: list[SymbolNode] = []
         try:
             tree = ast.parse(content)
@@ -98,12 +103,16 @@ class ASTParser:
                 stype = "method" if self.current_parent else "function"
                 decs = [cls._extract_decorator_name(d) for d in node.decorator_list if cls._extract_decorator_name(d)]
 
+                calls_set: set[str] = set()
                 calls: list[str] = []
                 for sub in ast.walk(node):
                     if isinstance(sub, ast.Call):
                         cname = cls._extract_base_name(sub.func)
-                        if cname and cname not in calls:
+                        if cname and cname not in calls_set:
+                            calls_set.add(cname)
                             calls.append(cname)
+                            if len(calls) >= 30:
+                                break
 
                 symbols.append(
                     SymbolNode(
@@ -115,7 +124,7 @@ class ASTParser:
                         parameters=params,
                         parent_symbol=self.current_parent,
                         decorators=decs,
-                        calls=calls[:30],
+                        calls=calls,
                     )
                 )
                 prev_parent = self.current_parent
@@ -156,14 +165,8 @@ class ASTParser:
         symbols: list[SymbolNode] = []
         lines = content.splitlines()
 
-        class_pattern = re.compile(r"^\s*(?:export\s+)?class\s+([A-Za-z0-9_]+)(?:\s+extends\s+([A-Za-z0-9_]+))?")
-        func_pattern = re.compile(
-            r"^\s*(?:async\s+)?(?:export\s+)?(?:def|function|const|let|var)\s+([A-Za-z0-9_]+)"
-        )
-        import_pattern = re.compile(r"^\s*(?:import|from)\s+([A-Za-z0-9_\./\-]+)")
-
         for idx, line in enumerate(lines, start=1):
-            class_match = class_pattern.search(line)
+            class_match = cls._RE_CLASS.search(line)
             if class_match:
                 bases = [class_match.group(2)] if class_match.group(2) else []
                 symbols.append(
@@ -177,7 +180,7 @@ class ASTParser:
                 )
                 continue
 
-            func_match = func_pattern.search(line)
+            func_match = cls._RE_FUNC.search(line)
             if func_match:
                 symbols.append(
                     SymbolNode(
@@ -189,7 +192,7 @@ class ASTParser:
                 )
                 continue
 
-            import_match = import_pattern.search(line)
+            import_match = cls._RE_IMPORT.search(line)
             if import_match:
                 symbols.append(
                     SymbolNode(
