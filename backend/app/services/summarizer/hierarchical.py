@@ -61,14 +61,22 @@ Provide a concise 2-3 sentence overview of this module's primary responsibility,
                 dependencies=[s.name for s in f_symbols if s.symbol_type == "import"]
             ))
 
+        # Fast lookup indices
+        files_by_parent: Dict[str, List[FileNode]] = {}
+        dirs_by_parent: Dict[str, List[FileNode]] = {}
+        for f in files:
+            files_by_parent.setdefault(f.parent_path or "", []).append(f)
+        for d in dirs:
+            dirs_by_parent.setdefault(d.parent_path or "", []).append(d)
+
         # Step 3 & 4: Folders (Child Folder -> Parent Folder)
         folder_summary_map: Dict[str, str] = {}
         for d in dirs:
             dir_path = d.relative_path
-            child_files = [f for f in files if f.parent_path == dir_path]
+            child_files = files_by_parent.get(dir_path, [])
             child_file_sums = [f"{f.name}: {file_summary_map.get(f.relative_path, '')}" for f in child_files]
 
-            sub_dirs = [sub for sub in dirs if sub.parent_path == dir_path]
+            sub_dirs = dirs_by_parent.get(dir_path, [])
             sub_dir_sums = [f"Folder '{sub.name}': {folder_summary_map.get(sub.relative_path, '')}" for sub in sub_dirs]
 
             combined_context = child_file_sums + sub_dir_sums
