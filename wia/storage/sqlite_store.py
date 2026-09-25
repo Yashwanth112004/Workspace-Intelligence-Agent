@@ -190,20 +190,6 @@ class SQLiteStore:
                     """,
                     batch_rows,
                 )
-                        b.batch_id,
-                        b.status,
-                        b.discovered_count,
-                        b.indexed_count,
-                        b.ignored_count,
-                        b.duration_seconds,
-                        b.started_at,
-                        b.completed_at,
-                        b.error_message,
-                        b.failure_stage,
-                        json.dumps(b.file_paths),
-                        b.narrative_summary,
-                    ),
-                )
         conn.close()
 
     @classmethod

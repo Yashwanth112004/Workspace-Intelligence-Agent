@@ -3,17 +3,19 @@
 import click
 
 
+_UNITS = ("B", "KB", "MB", "GB", "TB", "PB")
+_THRESHOLDS = tuple(1024 ** i for i in range(len(_UNITS)))
+
+
 def format_bytes(num_bytes: int) -> str:
-    """Format raw byte counts into human-friendly strings (B, KB, MB, GB)."""
-    if num_bytes < 0:
+    """Format raw byte counts into human-friendly strings (B, KB, MB, GB) with O(1) threshold calculation."""
+    if num_bytes <= 0:
         return "0 B"
-    for unit in ["B", "KB", "MB", "GB", "TB"]:
-        if abs(num_bytes) < 1024.0:
-            if unit == "B":
-                return f"{int(num_bytes)} B"
-            return f"{num_bytes:.1f} {unit}"
-        num_bytes /= 1024.0
-    return f"{num_bytes:.1f} PB"
+    for i in range(len(_UNITS) - 1, 0, -1):
+        thresh = _THRESHOLDS[i]
+        if num_bytes >= thresh:
+            return f"{num_bytes / thresh:.1f} {_UNITS[i]}"
+    return f"{int(num_bytes)} B"
 
 
 def format_header(title: str, subtitle: str | None = None) -> str:
