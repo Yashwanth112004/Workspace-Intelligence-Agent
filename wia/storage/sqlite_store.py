@@ -12,16 +12,22 @@ class SQLiteStore:
 
     @classmethod
     def get_connection(cls, db_path: str | Path) -> sqlite3.Connection:
-        """Create or connect to SQLite database at given path."""
+        """Create or connect to SQLite database with optimized PRAGMA settings."""
         path = Path(db_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(path))
         conn.row_factory = sqlite3.Row
+        # Performance tuning: WAL mode, memory temp store, 64MB cache, normalized synchronous
+        conn.execute("PRAGMA journal_mode = WAL;")
+        conn.execute("PRAGMA synchronous = NORMAL;")
+        conn.execute("PRAGMA cache_size = -64000;")
+        conn.execute("PRAGMA temp_store = MEMORY;")
+        conn.execute("PRAGMA foreign_keys = ON;")
         return conn
 
     @classmethod
     def init_schema(cls, conn: sqlite3.Connection) -> None:
-        """Initialize SQLite database schema tables."""
+        """Initialize SQLite database schema tables and query performance indices."""
         with conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS meta (
@@ -80,74 +86,110 @@ class SQLiteStore:
             if "narrative_summary" not in b_cols:
                 conn.execute("ALTER TABLE batches ADD COLUMN narrative_summary TEXT")
 
+            # High performance query indices
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_files_language ON files(language);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_files_status ON files(indexing_status);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_files_batch ON files(batch_id);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file_path);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(symbol_name);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_symbols_type ON symbols(symbol_type);")
+
     @classmethod
     def save_index(cls, db_path: str | Path, index: WorkspaceIndex) -> None:
-        """Persist a WorkspaceIndex object into SQLite tables."""
+        """Persist a WorkspaceIndex object into SQLite tables using batch operations."""
         conn = cls.get_connection(db_path)
         cls.init_schema(conn)
 
         with conn:
-            # Save metadata
-            conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", ("index_version", index.index_version))
-            conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", ("wia_version", index.wia_version))
-            conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", ("workspace_path", index.workspace_path))
-            conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", ("indexed_at", index.indexed_at))
-            conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", ("stats", json.dumps(index.stats)))
-            conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", ("languages", json.dumps(index.languages)))
-            conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", ("frameworks", json.dumps(index.frameworks)))
-            conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", ("batches", json.dumps([b.to_dict() for b in index.batches])))
+            # Save metadata in batch
+            meta_entries = [
+                ("index_version", index.index_version),
+                ("wia_version", index.wia_version),
+                ("workspace_path", index.workspace_path),
+                ("indexed_at", index.indexed_at),
+                ("stats", json.dumps(index.stats)),
+                ("languages", json.dumps(index.languages)),
+                ("frameworks", json.dumps(index.frameworks)),
+                ("batches", json.dumps([b.to_dict() for b in index.batches])),
+            ]
+            conn.executemany("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", meta_entries)
 
             # Clear existing files and symbols to rewrite accumulated state
             conn.execute("DELETE FROM symbols")
             conn.execute("DELETE FROM files")
 
-            # Save file records and extracted symbols
+            # Batch prepare file records and extracted symbols
+            file_rows = []
+            symbol_rows = []
             for rel_p, rec in index.files.items():
                 extra_json = json.dumps(rec.extra_metadata)
                 status_val = rec.indexing_status.value if hasattr(rec.indexing_status, "value") else str(rec.indexing_status)
                 batch_id = rec.extra_metadata.get("batch_id", "")
-                conn.execute(
+                file_rows.append((
+                    rec.relative_path,
+                    rec.file_size,
+                    rec.modified_time,
+                    rec.extension,
+                    rec.content_hash,
+                    rec.language,
+                    status_val,
+                    extra_json,
+                    batch_id,
+                ))
+
+                symbols = rec.extra_metadata.get("symbols", [])
+                for sym in symbols:
+                    symbol_rows.append((
+                        rec.relative_path,
+                        sym.get("name", ""),
+                        sym.get("symbol_type", ""),
+                        sym.get("line_number", 0),
+                    ))
+
+            if file_rows:
+                conn.executemany(
                     """
                     INSERT INTO files (path, file_size, modified_time, extension, content_hash, language, indexing_status, extra_metadata, batch_id)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (
-                        rec.relative_path,
-                        rec.file_size,
-                        rec.modified_time,
-                        rec.extension,
-                        rec.content_hash,
-                        rec.language,
-                        status_val,
-                        extra_json,
-                        batch_id,
-                    ),
+                    file_rows,
+                )
+            if symbol_rows:
+                conn.executemany(
+                    """
+                    INSERT INTO symbols (file_path, symbol_name, symbol_type, line_number)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    symbol_rows,
                 )
 
-                symbols = rec.extra_metadata.get("symbols", [])
-                for sym in symbols:
-                    conn.execute(
-                        """
-                        INSERT INTO symbols (file_path, symbol_name, symbol_type, line_number)
-                        VALUES (?, ?, ?, ?)
-                        """,
-                        (
-                            rec.relative_path,
-                            sym.get("name", ""),
-                            sym.get("symbol_type", ""),
-                            sym.get("line_number", 0),
-                        ),
-                    )
-
-            # Save batch records
+            # Save batch records in batch
             conn.execute("DELETE FROM batches")
-            for b in index.batches:
-                conn.execute(
+            batch_rows = [
+                (
+                    b.batch_id,
+                    b.status,
+                    b.discovered_count,
+                    b.indexed_count,
+                    b.ignored_count,
+                    b.duration_seconds,
+                    b.started_at,
+                    b.completed_at,
+                    b.error_message,
+                    b.failure_stage,
+                    json.dumps(b.file_paths),
+                    b.narrative_summary,
+                )
+                for b in index.batches
+            ]
+            if batch_rows:
+                conn.executemany(
                     """
                     INSERT OR REPLACE INTO batches (batch_id, status, discovered_count, indexed_count, ignored_count, duration_seconds, started_at, completed_at, error_message, failure_stage, file_paths_json, narrative_summary)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (
+                    batch_rows,
+                )
                         b.batch_id,
                         b.status,
                         b.discovered_count,
