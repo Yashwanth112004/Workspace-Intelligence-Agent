@@ -71,6 +71,66 @@ FILENAME_MAP: dict[str, str] = {
 }
 
 
+# Pre-allocated static sets for O(1) file classification lookups
+_DEPENDENCY_LOCK_FILES = frozenset({
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "poetry.lock",
+    "uv.lock",
+    "cargo.lock",
+    "gemfile.lock",
+    "composer.lock",
+    "pipfile.lock",
+})
+
+_BUILD_MANIFEST_FILES = frozenset({
+    "pyproject.toml",
+    "requirements.txt",
+    "requirements-dev.txt",
+    "setup.py",
+    "setup.cfg",
+    "package.json",
+    "cargo.toml",
+    "go.mod",
+    "go.sum",
+    "pom.xml",
+    "build.gradle",
+    "makefile",
+    "cmakelists.txt",
+    "gemfile",
+})
+
+_CONFIG_FILES = frozenset({
+    ".env",
+    ".env.example",
+    ".gitignore",
+    ".dockerignore",
+    ".editorconfig",
+    ".eslintrc",
+    ".prettierrc",
+    "tsconfig.json",
+    "vite.config.js",
+    "vite.config.ts",
+    "webpack.config.js",
+    "docker-compose.yml",
+    "docker-compose.yaml",
+})
+
+_DOC_EXTENSIONS = frozenset({".md", ".markdown", ".rst", ".adoc"})
+_CONFIG_EXTENSIONS = frozenset({".toml", ".ini", ".cfg", ".conf"})
+_SCRIPT_EXTENSIONS = frozenset({".sh", ".bash", ".zsh", ".ps1", ".bat", ".cmd"})
+_DATA_EXTENSIONS = frozenset({".csv", ".tsv", ".parquet", ".jsonl", ".sqlite", ".sqlite3", ".db", ".sql"})
+_ASSET_EXTENSIONS = frozenset({
+    ".png", ".jpg", ".jpeg", ".gif", ".ico", ".webp", ".svg",
+    ".woff", ".woff2", ".ttf", ".eot", ".mp3", ".mp4", ".wav",
+})
+_TEST_DIR_NAMES = frozenset({"tests", "test", "__tests__", "spec", "specs"})
+_DOC_DIR_NAMES = frozenset({"docs", "doc", "documentation"})
+_SCRIPT_DIR_NAMES = frozenset({"scripts", "bin", "tools"})
+_APP_DIR_NAMES = frozenset({"src", "lib", "app"})
+
+
 class FileType:
     """Standardized classification categories for workspace files."""
 
@@ -124,7 +184,7 @@ class LanguageDetector:
 
     @classmethod
     def detect_file_type(cls, file_path: str | Path) -> str:
-        """Classify file into functional categories (Source, Notebook, Test, CI/CD, Build, etc.)."""
+        """Classify file into functional categories with O(1) set lookups."""
         path = Path(file_path)
         rel_str = str(file_path).replace("\\", "/").lower()
         filename_lower = path.name.lower()
@@ -140,17 +200,7 @@ class LanguageDetector:
             return FileType.CI_CD
 
         # 3. Dependency Locks
-        if filename_lower in (
-            "package-lock.json",
-            "yarn.lock",
-            "pnpm-lock.yaml",
-            "poetry.lock",
-            "uv.lock",
-            "cargo.lock",
-            "gemfile.lock",
-            "composer.lock",
-            "pipfile.lock",
-        ) or ext_lower == ".lock":
+        if filename_lower in _DEPENDENCY_LOCK_FILES or ext_lower == ".lock":
             return FileType.DEPENDENCY_LOCK
 
         # 4. Tests
@@ -159,70 +209,38 @@ class LanguageDetector:
             or filename_lower.endswith("_test.py")
             or ".test." in filename_lower
             or ".spec." in filename_lower
-            or any(part in ("tests", "test", "__tests__", "spec", "specs") for part in parts[:-1])
+            or any(part in _TEST_DIR_NAMES for part in parts[:-1])
         ):
             return FileType.TEST
 
         # 5. Build & Packaging Manifests
-        if filename_lower in (
-            "pyproject.toml",
-            "requirements.txt",
-            "requirements-dev.txt",
-            "setup.py",
-            "setup.cfg",
-            "package.json",
-            "cargo.toml",
-            "go.mod",
-            "go.sum",
-            "pom.xml",
-            "build.gradle",
-            "makefile",
-            "cmakelists.txt",
-            "gemfile",
-        ) or filename_lower.startswith("dockerfile") or filename_lower.startswith("containerfile"):
+        if filename_lower in _BUILD_MANIFEST_FILES or filename_lower.startswith("dockerfile") or filename_lower.startswith("containerfile"):
             return FileType.BUILD
 
         # 6. Documentation
-        if ext_lower in (".md", ".markdown", ".rst", ".adoc") or (
+        if ext_lower in _DOC_EXTENSIONS or (
             ext_lower == ".txt" and any(k in filename_lower for k in ("readme", "license", "notice", "contributing", "changelog", "authors"))
-        ) or any(part in ("docs", "doc", "documentation") for part in parts[:-1]):
+        ) or any(part in _DOC_DIR_NAMES for part in parts[:-1]):
             return FileType.DOCUMENTATION
 
         # 7. Configuration
-        if filename_lower in (
-            ".env",
-            ".env.example",
-            ".gitignore",
-            ".dockerignore",
-            ".editorconfig",
-            ".eslintrc",
-            ".prettierrc",
-            "tsconfig.json",
-            "vite.config.js",
-            "vite.config.ts",
-            "webpack.config.js",
-            "docker-compose.yml",
-            "docker-compose.yaml",
-        ) or ext_lower in (".toml", ".ini", ".cfg", ".conf") or (
-            ext_lower in (".yaml", ".yml", ".json") and not any(part in ("src", "lib", "app") for part in parts)
+        if filename_lower in _CONFIG_FILES or ext_lower in _CONFIG_EXTENSIONS or (
+            ext_lower in (".yaml", ".yml", ".json") and not any(part in _APP_DIR_NAMES for part in parts)
         ):
             return FileType.CONFIGURATION
 
         # 8. Scripts
-        if ext_lower in (".sh", ".bash", ".zsh", ".ps1", ".bat", ".cmd") or any(
-            part in ("scripts", "bin", "tools") for part in parts[:-1]
+        if ext_lower in _SCRIPT_EXTENSIONS or any(
+            part in _SCRIPT_DIR_NAMES for part in parts[:-1]
         ):
             return FileType.SCRIPT
 
         # 9. Data files
-        if ext_lower in (".csv", ".tsv", ".parquet", ".jsonl", ".sqlite", ".sqlite3", ".db", ".sql"):
+        if ext_lower in _DATA_EXTENSIONS:
             return FileType.DATA
 
         # 10. Assets / Media
-        if ext_lower in (
-            ".png", ".jpg", ".jpeg", ".gif", ".ico", ".webp", ".svg",
-            ".woff", ".woff2", ".ttf", ".eot", ".mp3", ".mp4", ".wav",
-        ):
+        if ext_lower in _ASSET_EXTENSIONS:
             return FileType.ASSET
 
         # 11. Source Code for recognized programming languages
