@@ -128,7 +128,7 @@ class SQLiteStore:
             symbol_rows = []
             for rel_p, rec in index.files.items():
                 extra_json = json.dumps(rec.extra_metadata)
-                status_val = rec.indexing_status.value if hasattr(rec.indexing_status, "value") else str(rec.indexing_status)
+                status_val = rec.indexing_status.value if hasattr(rec.indexing_status, "value") else rec.indexing_status
                 batch_id = rec.extra_metadata.get("batch_id", "")
                 file_rows.append((
                     rec.relative_path,

@@ -15,7 +15,7 @@ def format_bytes(num_bytes: int) -> str:
         thresh = _THRESHOLDS[i]
         if num_bytes >= thresh:
             return f"{num_bytes / thresh:.1f} {_UNITS[i]}"
-    return f"{int(num_bytes)} B"
+    return f"{num_bytes} B"
 
 
 def format_header(title: str, subtitle: str | None = None) -> str:
