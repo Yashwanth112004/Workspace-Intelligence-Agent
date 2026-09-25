@@ -77,9 +77,20 @@ class SecretScanner:
             return "*" * len(text)
         return text[:4] + "*" * (len(text) - 8) + text[-4:]
 
+    _HEURISTIC_KEYWORDS = (
+        "akia",
+        "private key",
+        "ghp_",
+        "api",
+        "secret",
+        "token",
+        "password",
+        "hooks.slack.com",
+    )
+
     @classmethod
     def classify_finding(
-        cls, file_path: str, line_str: str, raw_secret: str, full_content: str = ""
+        cls, file_path: str, line_str: str, raw_secret: str, full_content: str = "", full_content_lower: str | None = None
     ) -> tuple[str, str]:
         """Classify finding as REAL_SECRET, SYNTHETIC_TEST_FIXTURE, or DOCUMENTATION_EXAMPLE based on evidence."""
         norm_p = file_path.replace("\\", "/").lower()
@@ -104,19 +115,32 @@ class SecretScanner:
                 "ghp_1234567890",
                 "assert",
             )
-            if any(ind in line_l or ind in full_content.lower() for ind in synthetic_indicators):
+            content_l = full_content_lower if full_content_lower is not None else full_content.lower()
+            if any(ind in line_l or ind in content_l for ind in synthetic_indicators):
                 return "SYNTHETIC_TEST_FIXTURE", "HIGH"
 
         return "REAL_SECRET", "HIGH"
 
     @classmethod
     def scan_content(cls, content: str, file_path: str = "") -> list[SecurityFinding]:
-        """Scan string content for security rule violations."""
+        """Scan string content for security rule violations with fast keyword pre-filtering."""
+        if not content:
+            return []
+
         findings: list[SecurityFinding] = []
+        content_lower = content.lower()
+
+        # Quick file-level check: skip scanning if content has none of the target keywords
+        if not any(k in content_lower for k in cls._HEURISTIC_KEYWORDS):
+            return []
 
         for line_num, line in enumerate(content.splitlines(), start=1):
             line_str = line.strip()
             if not line_str or (line_str.startswith("#") and "nosec" in line_str):
+                continue
+
+            line_lower = line_str.lower()
+            if not any(k in line_lower for k in cls._HEURISTIC_KEYWORDS):
                 continue
 
             for rule in cls.RULES:
@@ -127,7 +151,7 @@ class SecretScanner:
                     masked_snippet = line.replace(raw_val, masked_secret).strip()
 
                     classification, confidence = cls.classify_finding(
-                        file_path, line_str, raw_val, content
+                        file_path, line_str, raw_val, content, content_lower
                     )
 
                     findings.append(

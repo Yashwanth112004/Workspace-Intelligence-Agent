@@ -5,11 +5,12 @@ from typing import List, Tuple
 logger = logging.getLogger("wia.security")
 
 # Sensitive file patterns to completely ignore
-SENSITIVE_FILES = {
+SENSITIVE_NAMES = {
     ".env", ".env.local", ".env.production", ".env.staging",
-    "id_rsa", "id_ed25519", "id_dsa", ".pem", ".key", ".pkcs12", ".pfx",
+    "id_rsa", "id_ed25519", "id_dsa",
     "credentials.json", "service-account.json", "auth.token", "secret.yaml"
 }
+SENSITIVE_EXTENSIONS = (".pem", ".key", ".pkcs12", ".pfx")
 
 # Regex patterns for detecting and redacting secrets in code
 SECRET_PATTERNS = [
@@ -26,12 +27,7 @@ class SecretSafetyService:
     def is_sensitive_file(file_name: str) -> bool:
         """Returns True if the file name/extension represents a credential/secret file."""
         name_lower = file_name.lower()
-        if name_lower in SENSITIVE_FILES:
-            return True
-        for sens in SENSITIVE_FILES:
-            if sens.startswith(".") and name_lower.endswith(sens):
-                return True
-        return False
+        return name_lower in SENSITIVE_NAMES or name_lower.endswith(SENSITIVE_EXTENSIONS)
 
     @staticmethod
     def sanitize_content(text: str) -> str:
