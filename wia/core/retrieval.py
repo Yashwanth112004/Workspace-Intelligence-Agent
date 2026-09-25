@@ -117,7 +117,7 @@ class IntentClassifier:
 
 
 class WorkspaceRetriever:
-    """Multi-strategy context and evidence retriever with token budgeting."""
+    """Multi-strategy context and evidence retriever with token budgeting and cached analysis."""
 
     def __init__(self, index: WorkspaceIndex, graph: WorkspaceGraph | None = None):
         self.index = index
@@ -127,6 +127,13 @@ class WorkspaceRetriever:
             self.graph.build_from_index(index)
         else:
             self.graph = graph
+        self._cached_arch = None
+
+    def _get_architecture(self):
+        """Lazily compute and cache architecture analysis for current index."""
+        if self._cached_arch is None:
+            self._cached_arch = ArchitectureAnalyzer.analyze_workspace(self.index)
+        return self._cached_arch
 
     def retrieve(
         self,
@@ -176,8 +183,8 @@ class WorkspaceRetriever:
                     )
                 )
 
-        # 2. Main Entry Points & Core Modules
-        arch = ArchitectureAnalyzer.analyze_workspace(self.index)
+        # 2. Main Entry Points & Core Modules (cached)
+        arch = self._get_architecture()
         for ep in arch.entry_points[:6]:
             clean_ep = ep.strip("`").split(" -> ")[0].strip("`")
             for p in self.index.files:

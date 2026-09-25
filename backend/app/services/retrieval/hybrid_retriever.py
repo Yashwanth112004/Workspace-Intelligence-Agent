@@ -59,8 +59,16 @@ class HybridRetriever:
 
         # 3. Hierarchical Summary Retrieval
         for sm in summaries:
+            if sm.level == "repository":
+                retrieved_summaries.append({
+                    "level": sm.level,
+                    "target": sm.target_path or "root",
+                    "name": sm.name,
+                    "text": sm.summary_text
+                })
+                continue
             sm_terms = set(sm.summary_text.lower().split()) | set(sm.name.lower().split())
-            if len(q_terms & sm_terms) >= 2 or sm.level == "repository":
+            if len(q_terms & sm_terms) >= 2:
                 retrieved_summaries.append({
                     "level": sm.level,
                     "target": sm.target_path or "root",
