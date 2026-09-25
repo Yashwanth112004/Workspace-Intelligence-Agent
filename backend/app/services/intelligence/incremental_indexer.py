@@ -42,8 +42,6 @@ class IncrementalIndexer:
                 elif previous_hashes[rel_path] != file_hash:
                     modified.append(rel_path)
 
-        for old_path in previous_hashes:
-            if old_path not in current_hashes:
-                deleted.append(old_path)
-
+        # Fast set difference for deleted paths
+        deleted = list(previous_hashes.keys() - current_hashes.keys())
         return added, modified, deleted, current_hashes
