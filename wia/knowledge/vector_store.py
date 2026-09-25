@@ -85,7 +85,7 @@ class VectorStore:
 
     def remove_file_chunks(self, file_path: str) -> None:
         """Remove all indexed vector chunks belonging to target file path."""
-        target_p = str(file_path).replace("\\", "/")
+        target_p = file_path.replace("\\", "/")
         keys_to_remove = [k for k, r in self.records.items() if r.file_path == target_p]
         for k in keys_to_remove:
             del self.records[k]
