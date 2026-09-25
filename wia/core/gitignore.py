@@ -1,4 +1,4 @@
-"""Gitignore pattern processing engine using pathspec."""
+"""Gitignore pattern processing engine using pathspec with caching."""
 
 from pathlib import Path
 import pathspec
@@ -10,6 +10,8 @@ class GitignoreProcessor:
     def __init__(self, root_path: str | Path):
         self.root_path = Path(root_path).resolve()
         self.spec: pathspec.PathSpec | None = None
+        self._file_cache: dict[str, bool] = {}
+        self._dir_cache: dict[str, bool] = {}
         self._load_ignore_rules()
 
     def _load_ignore_rules(self) -> None:
@@ -61,6 +63,29 @@ class GitignoreProcessor:
         """Check if a relative POSIX file path matches `.gitignore` patterns."""
         if not self.spec:
             return False
-        # Normalize trailing slash for directories if needed
+
         posix_path = relative_path.replace("\\", "/")
-        return self.spec.match_file(posix_path)
+        if posix_path in self._file_cache:
+            return self._file_cache[posix_path]
+
+        # Fast parent directory check
+        parts = posix_path.split("/")
+        for i in range(1, len(parts)):
+            parent_dir = "/".join(parts[:i])
+            if parent_dir in self._dir_cache:
+                if self._dir_cache[parent_dir]:
+                    self._file_cache[posix_path] = True
+                    return True
+            else:
+                is_dir_ign = bool(
+                    self.spec.match_file(parent_dir + "/")
+                    or self.spec.match_file(parent_dir)
+                )
+                self._dir_cache[parent_dir] = is_dir_ign
+                if is_dir_ign:
+                    self._file_cache[posix_path] = True
+                    return True
+
+        res = bool(self.spec.match_file(posix_path))
+        self._file_cache[posix_path] = res
+        return res

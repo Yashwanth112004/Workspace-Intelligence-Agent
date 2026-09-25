@@ -265,6 +265,28 @@ class ArchitectureAnalyzer:
             },
         ]
 
+        # If predefined definitions don't match this codebase, dynamically discover components from top-level dirs
+        matched_any = any(
+            any(r.replace("\\", "/").startswith(cdef["prefix"]) for r in index.files)
+            for cdef in comp_definitions
+        )
+        if not matched_any and index.files:
+            top_level_dirs = set()
+            for r in index.files:
+                parts = r.replace("\\", "/").split("/")
+                if len(parts) > 1:
+                    top_level_dirs.add(parts[0])
+            if top_level_dirs:
+                comp_definitions = [
+                    {
+                        "name": f"{tdir.replace('_', ' ').replace('-', ' ').title()} Subsystem",
+                        "prefix": tdir,
+                        "role": f"{tdir.replace('_', ' ').replace('-', ' ').title()} Module Layer",
+                        "responsibility": f"Encapsulates modules and functionality located under '{tdir}/'.",
+                    }
+                    for tdir in sorted(top_level_dirs)
+                ]
+
         components_list: list[ComponentInfo] = []
         comp_file_map: dict[str, list[str]] = {}
 

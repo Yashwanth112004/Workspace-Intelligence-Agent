@@ -2,9 +2,14 @@
 
 import os
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 GENERATED_REPORT_FILENAMES = {"wia-report.html", "report_data.json"}
+PRUNED_DIR_NAMES = {
+    ".git", ".wia", "__pycache__", ".pytest_cache", ".mypy_cache",
+    ".tox", "venv", ".venv", "env", ".env", "node_modules", "vendor",
+    "dist", "build", "target", "out", "bin", "obj",
+}
 
 
 @dataclass
@@ -19,7 +24,7 @@ class DiscoveredFile:
 
 
 class FileDiscovery:
-    """Recursively discovers files within a repository workspace."""
+    """Recursively discovers files within a repository workspace with high throughput."""
 
     @staticmethod
     def discover_files(
@@ -38,6 +43,8 @@ class FileDiscovery:
 
         visited_dirs: set[Path] = set()
         visited_dirs.add(root.resolve())
+        root_str = str(root)
+        root_len = len(root_str)
 
         for current_root, dirs, files in os.walk(root, followlinks=follow_symlinks):
             current_path = Path(current_root)
@@ -50,15 +57,10 @@ class FileDiscovery:
                     continue
                 visited_dirs.add(resolved_current)
 
-            # Prune internal metadata, cache, and build directories from traversal
-            pruned_dirs = {
-                ".git", ".wia", "__pycache__", ".pytest_cache", ".mypy_cache",
-                ".tox", "venv", ".venv", "env", ".env", "node_modules", "vendor",
-                "dist", "build", "target", "out", "bin", "obj",
-            }
+            # In-place directory pruning to avoid traversing giant ignored subtrees
             dirs[:] = [
                 d for d in dirs
-                if d.lower() not in pruned_dirs
+                if d.lower() not in PRUNED_DIR_NAMES
                 and not d.lower().endswith(".egg-info")
                 and not d.lower().endswith(".dist-info")
             ]
@@ -77,8 +79,11 @@ class FileDiscovery:
                 is_symlink = abs_path.is_symlink()
 
                 try:
-                    rel_path = abs_path.relative_to(root)
-                    posix_rel_path = PurePosixPath(rel_path).as_posix()
+                    abs_path_str = str(abs_path)
+                    # Fast POSIX path normalization
+                    posix_rel_path = (
+                        abs_path_str[root_len:].lstrip("\\/").replace("\\", "/")
+                    )
 
                     stat = abs_path.lstat() if is_symlink else abs_path.stat()
                     file_size = stat.st_size

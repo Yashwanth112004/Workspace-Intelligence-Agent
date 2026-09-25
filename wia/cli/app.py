@@ -44,6 +44,7 @@ from wia.cli.commands.flow_cmd import flow_cmd
 from wia.cli.commands.diff_cmd import diff_cmd
 from wia.cli.commands.export_cmd import export_cmd
 from wia.cli.commands.serve_cmd import serve_cmd
+from wia.cli.commands.decide_cmd import decide_cmd
 from wia.cli.formatting import format_error
 from wia.exceptions import WIAError
 from wia.utils.logger import setup_logger
@@ -132,6 +133,7 @@ main.add_command(flow_cmd)
 main.add_command(diff_cmd)
 main.add_command(export_cmd)
 main.add_command(serve_cmd)
+main.add_command(decide_cmd)
 
 # Register command aliases for compatibility
 main.add_command(ask_cmd, name="query")

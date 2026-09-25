@@ -171,27 +171,26 @@ class IndexingService(BaseService):
             workers = max_workers or min(16, (os.cpu_count() or 4) * 2)
 
             # Process file chunks in batches with multi-threading
-            for idx, chunk in enumerate(file_chunks, start=1):
-                batch_id = f"Batch {idx}"
-                batch_start_t = time.perf_counter()
-                b_started_at = datetime.now(timezone.utc).isoformat()
-                b_file_paths = [file.relative_path for file in chunk]
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                for idx, chunk in enumerate(file_chunks, start=1):
+                    batch_id = f"Batch {idx}"
+                    batch_start_t = time.perf_counter()
+                    b_started_at = datetime.now(timezone.utc).isoformat()
+                    b_file_paths = [file.relative_path for file in chunk]
 
-                b_record = BatchRecord(
-                    batch_id=batch_id,
-                    status="RUNNING",
-                    file_paths=b_file_paths,
-                    discovered_count=len(chunk),
-                    started_at=b_started_at,
-                )
-                accumulated_batches.append(b_record)
+                    b_record = BatchRecord(
+                        batch_id=batch_id,
+                        status="RUNNING",
+                        file_paths=b_file_paths,
+                        discovered_count=len(chunk),
+                        started_at=b_started_at,
+                    )
+                    accumulated_batches.append(b_record)
 
-                b_indexed_cnt = 0
-                b_ignored_cnt = 0
+                    b_indexed_cnt = 0
+                    b_ignored_cnt = 0
 
-                try:
-                    # Parallel worker pool execution for file processing
-                    with ThreadPoolExecutor(max_workers=workers) as executor:
+                    try:
                         future_to_file = {
                             executor.submit(
                                 _process_file_worker,
@@ -216,28 +215,28 @@ class IndexingService(BaseService):
                             if is_fail:
                                 total_failed += 1
 
-                    # Mark batch completed
-                    b_duration = round(time.perf_counter() - batch_start_t, 3)
-                    b_record.status = "COMPLETED"
-                    b_record.indexed_count = b_indexed_cnt
-                    b_record.ignored_count = b_ignored_cnt
-                    b_record.duration_seconds = b_duration
-                    b_record.completed_at = datetime.now(timezone.utc).isoformat()
+                        # Mark batch completed
+                        b_duration = round(time.perf_counter() - batch_start_t, 3)
+                        b_record.status = "COMPLETED"
+                        b_record.indexed_count = b_indexed_cnt
+                        b_record.ignored_count = b_ignored_cnt
+                        b_record.duration_seconds = b_duration
+                        b_record.completed_at = datetime.now(timezone.utc).isoformat()
 
-                    sample_files = ", ".join([f"`{Path(p).name}`" for p in b_file_paths[:4]]) + (
-                        f" and {len(b_file_paths)-4} other files" if len(b_file_paths) > 4 else ""
-                    )
-                    b_record.narrative_summary = (
-                        f"**{batch_id}** processed {len(b_file_paths)} files ({sample_files}) in {b_duration}s."
-                    )
+                        sample_files = ", ".join([f"`{Path(p).name}`" for p in b_file_paths[:4]]) + (
+                            f" and {len(b_file_paths)-4} other files" if len(b_file_paths) > 4 else ""
+                        )
+                        b_record.narrative_summary = (
+                            f"**{batch_id}** processed {len(b_file_paths)} files ({sample_files}) in {b_duration}s."
+                        )
 
-                except Exception as err:
-                    b_duration = round(time.perf_counter() - batch_start_t, 3)
-                    b_record.status = "FAILED"
-                    b_record.error_message = str(err)
-                    b_record.failure_stage = "File Processing"
-                    b_record.duration_seconds = b_duration
-                    b_record.completed_at = datetime.now(timezone.utc).isoformat()
+                    except Exception as err:
+                        b_duration = round(time.perf_counter() - batch_start_t, 3)
+                        b_record.status = "FAILED"
+                        b_record.error_message = str(err)
+                        b_record.failure_stage = "File Processing"
+                        b_record.duration_seconds = b_duration
+                        b_record.completed_at = datetime.now(timezone.utc).isoformat()
 
             # 7. Run workspace-wide analyzers ONCE concurrently
             lang_counts: dict[str, int] = {}
@@ -298,11 +297,14 @@ class IndexingService(BaseService):
             except Exception:
                 pass
 
-            # Construct / refresh WorkspaceGraph
+            # Construct / refresh WorkspaceGraph and warm Inverted Search Index
             graph_t0 = time.perf_counter()
             ws_graph = WorkspaceGraph()
             ws_graph.build_from_index(new_index)
             graph_duration = round(time.perf_counter() - graph_t0, 3)
+
+            from wia.core.search_engine import WorkspaceSearchEngine
+            WorkspaceSearchEngine.get_or_build_inverted_index(new_index)
 
             # Calculate change summary
             change_summary = ChangeDetector.detect_changes(

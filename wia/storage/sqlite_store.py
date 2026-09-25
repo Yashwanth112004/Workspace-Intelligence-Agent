@@ -80,6 +80,11 @@ class SQLiteStore:
                     narrative_summary TEXT
                 );
             """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_files_lang ON files(language);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_files_status ON files(indexing_status);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(symbol_name);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_symbols_path ON symbols(file_path);")
+
             # Migration check: add narrative_summary column if not present
             cursor = conn.cursor()
             b_cols = [row["name"] for row in cursor.execute("PRAGMA table_info(batches)").fetchall()]
@@ -118,7 +123,7 @@ class SQLiteStore:
             conn.execute("DELETE FROM symbols")
             conn.execute("DELETE FROM files")
 
-            # Batch prepare file records and extracted symbols
+            # Prepare batch lists for high-performance executemany insertion
             file_rows = []
             symbol_rows = []
             for rel_p, rec in index.files.items():
