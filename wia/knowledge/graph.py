@@ -44,6 +44,7 @@ class WorkspaceGraph:
         self.edges: list[GraphEdge] = []
         self._adjacency: dict[str, list[GraphEdge]] = {}
         self._reverse_adjacency: dict[str, list[GraphEdge]] = {}
+        self._edge_index: dict[tuple[str, str, str], GraphEdge] = {}
 
     def add_node(
         self, node_id: str, node_type: str, name: str, file_path: str = "", metadata: dict | None = None
@@ -68,16 +69,15 @@ class WorkspaceGraph:
         metadata: dict | None = None,
     ) -> None:
         """Add a directional relationship edge between two existing nodes without duplicate edges."""
-        # Deduplicate edges between same source, target, and relation_type
-        existing = self._adjacency.get(source_id, [])
-        for e in existing:
-            if e.target_id == target_id and e.relation_type == relation_type:
-                if metadata and "imported_symbols" in metadata:
-                    e_syms = e.metadata.setdefault("imported_symbols", [])
-                    for s in metadata["imported_symbols"]:
-                        if s not in e_syms:
-                            e_syms.append(s)
-                return
+        edge_key = (source_id, target_id, relation_type)
+        existing = self._edge_index.get(edge_key)
+        if existing is not None:
+            if metadata and "imported_symbols" in metadata:
+                e_syms = existing.metadata.setdefault("imported_symbols", [])
+                for s in metadata["imported_symbols"]:
+                    if s not in e_syms:
+                        e_syms.append(s)
+            return
 
         edge = GraphEdge(
             source_id=source_id,
@@ -87,6 +87,7 @@ class WorkspaceGraph:
             metadata=metadata or {},
         )
         self.edges.append(edge)
+        self._edge_index[edge_key] = edge
         self._adjacency.setdefault(source_id, []).append(edge)
         self._reverse_adjacency.setdefault(target_id, []).append(edge)
 
@@ -96,6 +97,7 @@ class WorkspaceGraph:
         self.edges.clear()
         self._adjacency.clear()
         self._reverse_adjacency.clear()
+        self._edge_index.clear()
 
         STD_LIB_MODULES = {
             "sys", "os", "time", "datetime", "pathlib", "json", "html", "dataclasses",
@@ -292,11 +294,14 @@ class WorkspaceGraph:
             self._adjacency.pop(nid, None)
             self._reverse_adjacency.pop(nid, None)
 
-        # Clean edges list and other adjacency entries
+        # Clean edges list, edge index, and other adjacency entries
         self.edges = [
             e for e in self.edges
             if e.source_id not in nodes_to_remove and e.target_id not in nodes_to_remove
         ]
+        self._edge_index = {
+            (e.source_id, e.target_id, e.relation_type): e for e in self.edges
+        }
         for src_id, edge_list in list(self._adjacency.items()):
             self._adjacency[src_id] = [e for e in edge_list if e.target_id not in nodes_to_remove]
         for tgt_id, edge_list in list(self._reverse_adjacency.items()):
