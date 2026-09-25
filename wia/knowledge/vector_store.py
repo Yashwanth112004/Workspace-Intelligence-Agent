@@ -45,9 +45,10 @@ class VectorStore:
         dot = sum(a * b for a, b in zip(v1, v2))
         n1 = math.sqrt(sum(a * a for a in v1))
         n2 = math.sqrt(sum(b * b for b in v2))
-        if n1 == 0 or n2 == 0:
+        denom = n1 * n2
+        if denom == 0.0:
             return 0.0
-        return dot / (n1 * n2)
+        return max(-1.0, min(1.0, dot / denom))
 
     def add_chunk(self, chunk: SemanticChunk) -> VectorRecord:
         """Add or update a semantic chunk with generated vector embedding."""

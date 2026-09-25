@@ -111,25 +111,26 @@ class VectorSearchStore:
         emb_model = _get_embedder()
         if emb_model is not None:
             try:
-                emb = emb_model.encode(text, convert_to_numpy=True).tolist()
+                emb = emb_model.encode(text, convert_to_numpy=True, normalize_embeddings=True).tolist()
                 return emb
             except Exception:
                 pass
 
-        # TF-IDF / Term Frequency Hash Embedding Fallback
+        # TF-IDF / Term Frequency Hash Embedding Fallback with L2 unit normalization
         words = re.findall(r"\w+", text.lower())
         vec = [0.0] * 64
         for w in words:
             idx = abs(hash(w)) % 64
             vec[idx] += 1.0
-        norm = math.sqrt(sum(v*v for v in vec)) or 1.0
+        norm = math.sqrt(sum(v*v for v in vec))
+        if norm == 0.0:
+            return vec
         return [v / norm for v in vec]
 
     @staticmethod
     def _cosine_similarity(v1: List[float], v2: List[float]) -> float:
         if not v1 or not v2 or len(v1) != len(v2):
             return 0.0
+        # Fast dot-product on normalized vectors
         dot = sum(a * b for a, b in zip(v1, v2))
-        n1 = math.sqrt(sum(a * a for a in v1)) or 1.0
-        n2 = math.sqrt(sum(b * b for b in v2)) or 1.0
-        return dot / (n1 * n2)
+        return max(-1.0, min(1.0, dot))
