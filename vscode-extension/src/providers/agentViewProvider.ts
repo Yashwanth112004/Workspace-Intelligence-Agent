@@ -146,22 +146,9 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
             return;
         }
 
-        const hasConfig = await this.secretStorage.hasValidLLMConfiguration();
-        if (!hasConfig) {
-            this._view.webview.html = this.getHtmlForOnboarding();
-            return;
-        }
-
-        const isAuth = this.secretStorage.isWorkspaceAuthorized(root);
-        if (!isAuth) {
-            this._view.webview.html = this.getHtmlForAuthorization();
-            return;
-        }
-
-        if (!this.workspaceIntelligence && !this.isAnalyzing) {
-            this._view.webview.html = this.getHtmlForAnalysisProgress();
+        if (!this.workspaceIntelligence) {
+            this.workspaceIntelligence = this.createFallbackWorkspaceIntelligence(root);
             this.startFullAnalysis();
-            return;
         }
 
         this._view.webview.html = this.getHtmlForDashboard();
@@ -801,10 +788,10 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
                 </div>
 
                 <div class="quick-action-row">
-                    <button class="action-chip" onclick="askQuick('Show architecture')">🗺️ Architecture</button>
-                    <button class="action-chip" onclick="askQuick('Check dependencies')">📦 Dependencies</button>
-                    <button class="action-chip" onclick="askQuick('Check environment')">🩺 Doctor</button>
-                    <button class="action-chip" onclick="askQuick('Show project status')">📊 Status</button>
+                    <button class="action-chip" type="button" data-query="Show architecture" onclick="askQuick('Show architecture')">🗺️ Architecture</button>
+                    <button class="action-chip" type="button" data-query="Check dependencies" onclick="askQuick('Check dependencies')">📦 Dependencies</button>
+                    <button class="action-chip" type="button" data-query="Check environment" onclick="askQuick('Check environment')">🩺 Doctor</button>
+                    <button class="action-chip" type="button" data-query="Show project status" onclick="askQuick('Show project status')">📊 Status</button>
                 </div>
             </div>
         `;
@@ -818,7 +805,7 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
                             ${isHealthy ? '● Ready' : errors.length > 0 ? '✕ ' + errors.length + (errors.length === 1 ? ' Error' : ' Errors') : '⚠ ' + warnings.length + (warnings.length === 1 ? ' Issue' : ' Issues')}
                         </span>
                     </div>
-                    <button class="icon-btn" onclick="openSettings()" title="Settings">⚙</button>
+                    <button class="icon-btn" id="btnSettings" type="button" onclick="openSettings()" title="Settings">⚙</button>
                 </div>
                 <div class="project-meta">
                     <div class="proj-name">${escapeHtml(wsName)}</div>
@@ -826,10 +813,10 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
                 </div>
 
                 <div class="quick-nav-pills">
-                    <button class="nav-pill" onclick="triggerTab('architecture')">Architecture</button>
-                    <button class="nav-pill" onclick="triggerTab('dependencies')">Dependencies</button>
-                    <button class="nav-pill" onclick="triggerTab('environment')">Environment</button>
-                    <button class="nav-pill" onclick="triggerTab('status')">Status</button>
+                    <button class="nav-pill" type="button" data-tab="architecture" onclick="triggerTab('architecture')">Architecture</button>
+                    <button class="nav-pill" type="button" data-tab="dependencies" onclick="triggerTab('dependencies')">Dependencies</button>
+                    <button class="nav-pill" type="button" data-tab="environment" onclick="triggerTab('environment')">Environment</button>
+                    <button class="nav-pill" type="button" data-tab="status" onclick="triggerTab('status')">Status</button>
                 </div>
             </div>
 
@@ -847,10 +834,30 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
             </div>
 
             <script>
-                const vscode = acquireVsCodeApi();
+                var vscode;
+                try {
+                    vscode = acquireVsCodeApi();
+                } catch (e) {
+                    vscode = window.vscode || (typeof acquireVsCodeApi !== 'undefined' ? acquireVsCodeApi() : null);
+                }
+                window.vscode = vscode;
+
+                function postToExtension(msg) {
+                    try {
+                        var api = window.vscode || (typeof vscode !== 'undefined' ? vscode : null);
+                        if (api && api.postMessage) {
+                            api.postMessage(msg);
+                        } else {
+                            console.warn('VSCode API not available:', msg);
+                        }
+                    } catch (err) {
+                        console.error('postToExtension error:', err);
+                    }
+                }
+                window.postToExtension = postToExtension;
 
                 window.openSettings = function() {
-                    if (vscode && vscode.postMessage) vscode.postMessage({ type: 'openSettings' });
+                    postToExtension({ type: 'openSettings' });
                 };
 
                 window.triggerTab = function(tab) {
@@ -862,15 +869,14 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
                 };
 
                 window.askQuick = function(query) {
+                    if (!query) return;
                     appendUserMessage(query);
                     showStatus('Routing query via Laya: ' + query + '...');
-                    if (vscode && vscode.postMessage) {
-                        vscode.postMessage({ type: 'askAgent', query: query });
-                    }
+                    postToExtension({ type: 'askAgent', query: query });
                 };
 
                 window.authorizeRepair = function(cmd) {
-                    if (vscode && vscode.postMessage) vscode.postMessage({ type: 'authorizeRepair', command: cmd });
+                    postToExtension({ type: 'authorizeRepair', command: cmd });
                 };
 
                 function sendQuery() {
@@ -884,9 +890,7 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
                         input.style.height = 'auto';
                         appendUserMessage(query);
                         showStatus('Routing query via Laya: ' + query + '...');
-                        if (vscode && vscode.postMessage) {
-                            vscode.postMessage({ type: 'askAgent', query: query });
-                        }
+                        postToExtension({ type: 'askAgent', query: query });
                     } catch (err) {
                         console.error('sendQuery error:', err);
                     }
@@ -989,7 +993,7 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
                         for (var j = 0; j < callers.length; j++) {
                             var c = callers[j];
                             var cleanPath = c.replace(/\\s*\\(.*?\\)$/, '').trim();
-                            cItems += '<div class="impact-file-item" onclick="vscode.postMessage({type:\'openFile\',filePath:\'' + cleanPath.replace(/'/g, "\\'") + '\'})" title="Click to open ' + cleanPath + '">📄 ' + escapeText(c) + '</div>';
+                            cItems += '<div class="impact-file-item" data-filepath="' + escapeText(cleanPath) + '" onclick="postToExtension({type:\'openFile\',filePath:\'' + cleanPath.replace(/'/g, "\\'") + '\'})" title="Click to open ' + cleanPath + '">📄 ' + escapeText(c) + '</div>';
                         }
                         callersHtml = '<div class="impact-section">' +
                             '<div class="impact-sec-title">Direct Callers / Dependents (' + callers.length + ')</div>' +
@@ -1002,7 +1006,7 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
                         var aItems = '';
                         for (var k = 0; k < affected.length; k++) {
                             var a = affected[k];
-                            aItems += '<div class="impact-file-item" onclick="vscode.postMessage({type:\'openFile\',filePath:\'' + a.replace(/'/g, "\\'") + '\'})" title="Click to open ' + a + '">📄 ' + escapeText(a) + '</div>';
+                            aItems += '<div class="impact-file-item" data-filepath="' + escapeText(a) + '" onclick="postToExtension({type:\'openFile\',filePath:\'' + a.replace(/'/g, "\\'") + '\'})" title="Click to open ' + a + '">📄 ' + escapeText(a) + '</div>';
                         }
                         var isOpen = callers.length === 0 ? ' open' : '';
                         affectedHtml = '<details class="impact-details"' + isOpen + '>' +
@@ -1011,7 +1015,7 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
                         '</details>';
                     }
 
-                    var definedHtml = definedIn ? '<span class="impact-tag file-tag" onclick="vscode.postMessage({type:\'openFile\',filePath:\'' + definedIn.replace(/'/g, "\\'") + '\'})" title="Open ' + definedIn + '">📁 ' + escapeText(definedIn) + '</span>' : '';
+                    var definedHtml = definedIn ? '<span class="impact-tag file-tag" data-filepath="' + escapeText(definedIn) + '" onclick="postToExtension({type:\'openFile\',filePath:\'' + definedIn.replace(/'/g, "\\'") + '\'})" title="Open ' + definedIn + '">📁 ' + escapeText(definedIn) + '</span>' : '';
                     var explHtml = explanation ? '<div class="impact-explanation">' + escapeText(explanation) + '</div>' : '';
 
                     return '<div class="impact-card">' +
@@ -1113,7 +1117,7 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
                     }
 
                     // Settings Button
-                    if (target.classList.contains('icon-btn') || target.closest('.icon-btn')) {
+                    if (target.id === 'btnSettings' || target.classList.contains('icon-btn') || target.closest('.icon-btn')) {
                         e.preventDefault();
                         window.openSettings();
                         return;
@@ -1123,8 +1127,8 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
                     const navPill = target.closest('.nav-pill');
                     if (navPill) {
                         e.preventDefault();
-                        const txt = navPill.textContent.trim().toLowerCase();
-                        window.triggerTab(txt);
+                        const tab = navPill.getAttribute('data-tab') || navPill.textContent.trim().toLowerCase();
+                        window.triggerTab(tab);
                         return;
                     }
 
@@ -1132,8 +1136,17 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
                     const actionChip = target.closest('.action-chip');
                     if (actionChip) {
                         e.preventDefault();
-                        const query = actionChip.textContent.replace(/^[^\w]+/, '').trim();
+                        const query = actionChip.getAttribute('data-query') || actionChip.textContent.replace(/^[^\w]+/, '').trim();
                         window.askQuick(query);
+                        return;
+                    }
+
+                    // Impact File items
+                    const fileItem = target.closest('.impact-file-item, .impact-tag.file-tag');
+                    if (fileItem) {
+                        e.preventDefault();
+                        const fp = fileItem.getAttribute('data-filepath') || fileItem.textContent.replace(/^[^\w/\\.]+/, '').trim();
+                        if (fp) postToExtension({ type: 'openFile', filePath: fp });
                         return;
                     }
                 });

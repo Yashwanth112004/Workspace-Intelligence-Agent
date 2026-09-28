@@ -405,7 +405,24 @@ export class WiaChatPanel {
     </div>
 
     <script>
-        const vscode = acquireVsCodeApi();
+        var vscode;
+        try {
+            vscode = acquireVsCodeApi();
+        } catch (e) {
+            vscode = window.vscode || (typeof acquireVsCodeApi !== 'undefined' ? acquireVsCodeApi() : null);
+        }
+        window.vscode = vscode;
+
+        function postToExtension(msg) {
+            try {
+                var api = window.vscode || (typeof vscode !== 'undefined' ? vscode : null);
+                if (api && api.postMessage) {
+                    api.postMessage(msg);
+                }
+            } catch (err) {
+                console.error('postToExtension error:', err);
+            }
+        }
 
         function sendPrompt(text) {
             document.getElementById('userInput').value = text;
@@ -417,16 +434,16 @@ export class WiaChatPanel {
             const text = input.value.trim();
             if (!text) return;
             appendMsg('user', text);
-            vscode.postMessage({ command: 'askQuestion', text: text });
+            postToExtension({ command: 'askQuestion', text: text });
             input.value = '';
         }
 
         function triggerScan() {
-            vscode.postMessage({ command: 'scanWorkspace' });
+            postToExtension({ command: 'scanWorkspace' });
         }
 
         function triggerDaemon() {
-            vscode.postMessage({ command: 'startDaemon' });
+            postToExtension({ command: 'startDaemon' });
         }
 
         function renderMarkdown(md) {
@@ -464,17 +481,19 @@ export class WiaChatPanel {
             content += renderMarkdown(text);
 
             if (showScanBtn) {
-                content += '<br/><button class="action-btn" onclick="triggerScan()">🚀 Scan Workspace Now</button>';
+                content += '<br/><button class="action-btn" type="button" onclick="triggerScan()">🚀 Scan Workspace Now</button>';
             }
             if (showDaemonBtn) {
-                content += '<br/><button class="action-btn" onclick="triggerDaemon()">⚡ Start WIA Daemon</button>';
+                content += '<br/><button class="action-btn" type="button" onclick="triggerDaemon()">⚡ Start WIA Daemon</button>';
             }
 
             if (citations && citations.length > 0) {
                 content += '<div class="citations"><b>📑 Evidence Sources:</b><br/>';
                 citations.forEach(c => {
                     const lineSuffix = c.start_line ? ':' + c.start_line : '';
-                    content += '<button class="cite-btn" onclick="vscode.postMessage({ command: \\'openCitation\\', filePath: \\'' + c.file_path + '\\', line: ' + (c.start_line || 1) + ' })">📄 ' + c.file_path + lineSuffix + '</button>';
+                    const escapedPath = (c.file_path || '').replace(/"/g, '&quot;');
+                    const lineNum = c.start_line || 1;
+                    content += '<button class="cite-btn" type="button" data-filepath="' + escapedPath + '" data-line="' + lineNum + '">📄 ' + escapedPath + lineSuffix + '</button>';
                 });
                 content += '</div>';
             }
@@ -524,7 +543,7 @@ export class WiaChatPanel {
                 const fp = citeBtn.getAttribute('data-filepath');
                 const line = parseInt(citeBtn.getAttribute('data-line') || '1', 10);
                 if (fp) {
-                    vscode.postMessage({ command: 'openCitation', filePath: fp, line: line });
+                    postToExtension({ command: 'openCitation', filePath: fp, line: line });
                 }
                 return;
             }
@@ -532,6 +551,7 @@ export class WiaChatPanel {
 
         window.addEventListener('message', event => {
             const msg = event.data;
+            if (!msg) return;
             if (msg.command === 'addMessage') {
                 appendMsg(msg.sender, msg.text, msg.citations, msg.intent, msg.showScanBtn, msg.showDaemonBtn);
             } else if (msg.command === 'setThinking') {

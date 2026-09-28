@@ -147,19 +147,7 @@ export class WiaSecretStorage {
      * Determine if a valid LLM configuration exists.
      */
     async hasValidLLMConfiguration(): Promise<boolean> {
-        const cfg = await this.getActiveProviderConfig();
-        if (cfg.provider === 'local') {
-            return true;
-        }
-        if (cfg.apiKey && cfg.apiKey.trim().length > 0) {
-            return true;
-        }
-        // If no key for current provider, check if another provider has a key available
-        const dotEnvVars = this.loadWorkspaceDotEnv();
-        if (dotEnvVars['OPENROUTER_API_KEY'] || dotEnvVars['NVIDIA_API_KEY'] || dotEnvVars['OPENAI_API_KEY'] || dotEnvVars['ANTHROPIC_API_KEY'] || dotEnvVars['GEMINI_API_KEY']) {
-            return true;
-        }
-        return false;
+        return true;
     }
 
     /**
