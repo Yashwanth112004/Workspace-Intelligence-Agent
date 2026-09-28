@@ -237,8 +237,7 @@ class ReportGenerator:
         # Build File Intelligence Cards HTML Grouped by Language with Anchors
         language_nav_items_html = ""
         language_select_options_html = (
-            f'                    <option value="" selected disabled>-- Select a Language to View Files --</option>\n'
-            f'                    <option value="all">🌐 All Languages ({len(files_data)} files)</option>\n'
+            f'                    <option value="" selected disabled>-- Select a Language to Inspect Files --</option>\n'
         )
         grouped_files_html = ""
 
@@ -341,19 +340,22 @@ class ReportGenerator:
                 """
 
             grouped_files_html += f"""
-            <div class="language-section" id="{lang_id}" data-language-group="{lang_slug}" style="display:none;">
-                <div class="language-section-header">
+            <details class="language-dropdown-panel card" id="{lang_id}" data-language-group="{lang_slug}" style="display:none; margin-bottom: 1.25rem;">
+                <summary class="language-dropdown-header">
                     <div style="display:flex; align-items:center; gap:0.6rem;">
-                        <a href="#{lang_id}" class="anchor-link" style="font-size:1.2rem;" title="Direct link to {lang_name_esc} files">#</a>
-                        <h3 style="margin:0; font-size:1.2rem; color:var(--text-color);">{lang_name_esc} Files</h3>
+                        <a href="#{lang_id}" class="anchor-link" style="font-size:1.2rem;" title="Direct link to {lang_name_esc} files" onclick="event.stopPropagation()">#</a>
+                        <h3 style="margin:0; font-size:1.15rem; color:var(--text-color); display:inline-block;">{icon} {lang_name_esc} Files</h3>
                         <span class="badge badge-info">{count} File{'s' if count != 1 else ''}</span>
                     </div>
-                    <button class="toggle-btn" onclick="toggleLanguageDetails('{lang_id}')">Toggle All Details</button>
-                </div>
-                <div class="language-file-list">
+                    <div style="display:flex; align-items:center; gap:0.6rem;">
+                        <button class="toggle-btn" onclick="event.stopPropagation(); toggleLanguageDetails('{lang_id}')">Toggle All Symbols</button>
+                        <span class="dropdown-chevron">▼</span>
+                    </div>
+                </summary>
+                <div class="language-file-list" style="margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid var(--border-color);">
                     {group_cards_html}
                 </div>
-            </div>
+            </details>
             """
 
         # Frameworks HTML
@@ -699,30 +701,40 @@ class ReportGenerator:
             color: var(--accent-color);
         }}
 
-        /* Filter Pills */
-        /* Filter Toolbar & Language Dropdown */
-        .filter-toolbar {{
-            display: flex;
-            gap: 1rem;
-            align-items: center;
-            margin-bottom: 1.25rem;
-            flex-wrap: wrap;
+        /* Search Box & Language Dropdown */
+        .search-container {{
+            margin-bottom: 0.85rem;
         }}
-        .search-input-wrapper {{
-            flex: 1;
-            min-width: 280px;
-        }}
-        .lang-dropdown-wrapper {{
-            min-width: 240px;
-        }}
-        .lang-select {{
+        .search-input {{
             width: 100%;
-            padding: 0.7rem 1rem;
+            padding: 0.75rem 1rem;
             border-radius: 0.5rem;
             border: 1px solid var(--border-color);
             background-color: var(--sidebar-bg);
             color: var(--text-color);
             font-size: 0.9rem;
+        }}
+        .search-input:focus {{
+            outline: 2px solid var(--accent-color);
+        }}
+        .lang-dropdown-wrapper {{
+            margin-bottom: 1.25rem;
+        }}
+        .dropdown-label {{
+            display: block;
+            font-size: 0.82rem;
+            color: var(--muted-color);
+            margin-bottom: 0.4rem;
+            font-weight: 500;
+        }}
+        .lang-select {{
+            width: 100%;
+            padding: 0.75rem 1rem;
+            border-radius: 0.5rem;
+            border: 1px solid var(--border-color);
+            background-color: var(--sidebar-bg);
+            color: var(--text-color);
+            font-size: 0.92rem;
             font-weight: 500;
             cursor: pointer;
             outline: none;
@@ -736,6 +748,38 @@ class ReportGenerator:
             background-color: var(--sidebar-bg);
             color: var(--text-color);
             padding: 0.5rem;
+        }}
+
+        /* Language Dropdown Panels */
+        .language-dropdown-panel {{
+            background-color: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 0.75rem;
+            padding: 1.1rem 1.25rem;
+            margin-bottom: 1.25rem;
+            transition: all 0.2s ease;
+        }}
+        .language-dropdown-panel[open] {{
+            border-color: rgba(56, 189, 248, 0.4);
+        }}
+        .language-dropdown-header {{
+            cursor: pointer;
+            list-style: none;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            user-select: none;
+        }}
+        .language-dropdown-header::-webkit-details-marker {{
+            display: none;
+        }}
+        .dropdown-chevron {{
+            color: var(--muted-color);
+            font-size: 0.75rem;
+            transition: transform 0.2s ease;
+        }}
+        details[open] .dropdown-chevron {{
+            transform: rotate(180deg);
         }}
 
         /* Tables */
@@ -930,15 +974,15 @@ class ReportGenerator:
         <section id="file-narratives">
             <h2 class="section-heading"><a href="#file-narratives" class="anchor-link">#</a> File-by-File Codebase Intelligence ({len(files_data)} Files)</h2>
             
-            <div class="filter-toolbar">
-                <div class="search-input-wrapper">
-                    <input type="text" id="fileSearch" class="search-input" placeholder="Search repository files, symbols, modules, architectural roles..." onkeyup="filterFiles()">
-                </div>
-                <div class="lang-dropdown-wrapper">
-                    <select id="languageSelect" class="lang-select" onchange="onLanguageSelect(this.value)">
-                        {language_select_options_html}
-                    </select>
-                </div>
+            <div class="search-container">
+                <input type="text" id="fileSearch" class="search-input" placeholder="Search repository files, symbols, modules, architectural roles..." onkeyup="filterFiles()">
+            </div>
+
+            <div class="lang-dropdown-wrapper">
+                <label for="languageSelect" class="dropdown-label">Select Programming Language:</label>
+                <select id="languageSelect" class="lang-select" onchange="onLanguageSelect(this.value)">
+                    {language_select_options_html}
+                </select>
             </div>
 
             <div id="fileList">
@@ -946,7 +990,7 @@ class ReportGenerator:
                     <div style="font-size:2.8rem; margin-bottom:0.75rem;">📂</div>
                     <h3 style="margin:0 0 0.5rem 0; color:var(--text-color); font-size:1.15rem;">Select a Language to View Files</h3>
                     <p style="margin:0 auto; font-size:0.9rem; max-width:480px; line-height:1.5;">
-                        Choose a programming language from the dropdown selector above to inspect its indexed source files, declared AST symbols, and dependency relationships.
+                        Choose a programming language from the dropdown selector above to open its dedicated file inspection dropdown, declared AST symbols, and dependency relationships.
                     </p>
                 </div>
                 {grouped_files_html}
@@ -999,34 +1043,36 @@ class ReportGenerator:
             }}
 
             const placeholder = document.getElementById('noLangPlaceholder');
-            const sections = document.querySelectorAll('.language-section');
+            const panels = document.querySelectorAll('.language-dropdown-panel');
 
             if (!langSlug) {{
                 if (placeholder) placeholder.style.display = 'block';
-                sections.forEach(s => s.style.display = 'none');
+                panels.forEach(p => {{
+                    p.style.display = 'none';
+                    p.open = false;
+                }});
                 return;
             }}
 
             if (placeholder) placeholder.style.display = 'none';
 
-            if (langSlug === 'all') {{
-                sections.forEach(s => s.style.display = 'block');
-            }} else {{
-                sections.forEach(s => {{
-                    if (s.getAttribute('data-language-group') === langSlug) {{
-                        s.style.display = 'block';
-                    }} else {{
-                        s.style.display = 'none';
-                    }}
-                }});
-            }}
+            panels.forEach(p => {{
+                if (p.getAttribute('data-language-group') === langSlug) {{
+                    p.style.display = 'block';
+                    p.open = true;
+                }} else {{
+                    p.style.display = 'none';
+                    p.open = false;
+                }}
+            }});
+
             filterFiles();
         }}
 
         function toggleLanguageDetails(langSectionId) {{
             const sec = document.getElementById(langSectionId);
             if (!sec) return;
-            const detailsList = sec.querySelectorAll('details');
+            const detailsList = sec.querySelectorAll('.file-details');
             if (!detailsList.length) return;
             const anyClosed = Array.from(detailsList).some(d => !d.open);
             detailsList.forEach(d => d.open = anyClosed);
@@ -1037,15 +1083,18 @@ class ReportGenerator:
             const selectEl = document.getElementById('languageSelect');
             let currentLang = selectEl ? selectEl.value : '';
             const placeholder = document.getElementById('noLangPlaceholder');
+            const panels = document.querySelectorAll('.language-dropdown-panel');
 
-            if (input && !currentLang) {{
-                currentLang = 'all';
-                if (placeholder) placeholder.style.display = 'none';
-            }} else if (!input && !currentLang) {{
+            if (!input && !currentLang) {{
                 if (placeholder) placeholder.style.display = 'block';
-                document.querySelectorAll('.language-section').forEach(s => s.style.display = 'none');
+                panels.forEach(p => {{
+                    p.style.display = 'none';
+                    p.open = false;
+                }});
                 return;
             }}
+
+            if (placeholder) placeholder.style.display = 'none';
 
             const cards = document.querySelectorAll('.file-card');
             cards.forEach(card => {{
@@ -1053,7 +1102,7 @@ class ReportGenerator:
                 const cardLang = card.getAttribute('data-language') || '';
                 const text = card.innerText.toLowerCase();
 
-                const matchesLang = (currentLang === 'all' || cardLang === currentLang);
+                const matchesLang = (!currentLang || cardLang === currentLang);
                 const matchesSearch = (!input || path.includes(input) || text.includes(input));
 
                 if (matchesLang && matchesSearch) {{
@@ -1063,14 +1112,20 @@ class ReportGenerator:
                 }}
             }});
 
-            // Hide empty language sections when searching or filtering
-            document.querySelectorAll('.language-section').forEach(sec => {{
-                const secLang = sec.getAttribute('data-language-group') || '';
-                if (currentLang !== 'all' && secLang !== currentLang) {{
-                    sec.style.display = 'none';
+            // Manage panel visibility based on matches
+            panels.forEach(panel => {{
+                const panelLang = panel.getAttribute('data-language-group') || '';
+                if (currentLang && panelLang !== currentLang) {{
+                    panel.style.display = 'none';
+                    panel.open = false;
                 }} else {{
-                    const hasVisible = Array.from(sec.querySelectorAll('.file-card')).some(c => c.style.display !== 'none');
-                    sec.style.display = hasVisible ? 'block' : 'none';
+                    const hasVisible = Array.from(panel.querySelectorAll('.file-card')).some(c => c.style.display !== 'none');
+                    if (hasVisible) {{
+                        panel.style.display = 'block';
+                        panel.open = true;
+                    }} else {{
+                        panel.style.display = 'none';
+                    }}
                 }}
             }});
         }}
