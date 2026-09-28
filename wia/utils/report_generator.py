@@ -340,19 +340,19 @@ class ReportGenerator:
                 """
 
             grouped_files_html += f"""
-            <details class="language-dropdown-panel card" id="{lang_id}" data-language-group="{lang_slug}" style="display:none; margin-bottom: 1.25rem;">
+            <details class="language-dropdown-panel card" id="{lang_id}" data-language-group="{lang_slug}" style="display:block; margin-bottom: 1rem;">
                 <summary class="language-dropdown-header">
                     <div style="display:flex; align-items:center; gap:0.6rem;">
-                        <a href="#{lang_id}" class="anchor-link" style="font-size:1.2rem;" title="Direct link to {lang_name_esc} files" onclick="event.stopPropagation()">#</a>
-                        <h3 style="margin:0; font-size:1.15rem; color:var(--text-color); display:inline-block;">{icon} {lang_name_esc} Files</h3>
+                        <span class="dropdown-chevron">▶</span>
+                        <a href="#{lang_id}" class="anchor-link" style="font-size:1.15rem;" title="Direct link to {lang_name_esc} files" onclick="event.stopPropagation()">#</a>
+                        <h3 style="margin:0; font-size:1.1rem; color:var(--text-color); display:inline-block;">{icon} {lang_name_esc} Files</h3>
                         <span class="badge badge-info">{count} File{'s' if count != 1 else ''}</span>
                     </div>
                     <div style="display:flex; align-items:center; gap:0.6rem;">
                         <button class="toggle-btn" onclick="event.stopPropagation(); toggleLanguageDetails('{lang_id}')">Toggle All Symbols</button>
-                        <span class="dropdown-chevron">▼</span>
                     </div>
                 </summary>
-                <div class="language-file-list" style="margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid var(--border-color);">
+                <div class="language-file-list" style="margin-top: 1rem; padding-top: 0.85rem; border-top: 1px solid var(--border-color);">
                     {group_cards_html}
                 </div>
             </details>
@@ -774,12 +774,14 @@ class ReportGenerator:
             display: none;
         }}
         .dropdown-chevron {{
-            color: var(--muted-color);
-            font-size: 0.75rem;
+            color: var(--accent-color);
+            font-size: 0.85rem;
+            margin-right: 0.35rem;
+            display: inline-block;
             transition: transform 0.2s ease;
         }}
-        details[open] .dropdown-chevron {{
-            transform: rotate(180deg);
+        details[open] > summary .dropdown-chevron {{
+            transform: rotate(90deg);
         }}
 
         /* Tables */
@@ -979,20 +981,13 @@ class ReportGenerator:
             </div>
 
             <div class="lang-dropdown-wrapper">
-                <label for="languageSelect" class="dropdown-label">Select Programming Language:</label>
+                <label for="languageSelect" class="dropdown-label">Jump to Language Dropdown:</label>
                 <select id="languageSelect" class="lang-select" onchange="onLanguageSelect(this.value)">
                     {language_select_options_html}
                 </select>
             </div>
 
             <div id="fileList">
-                <div id="noLangPlaceholder" class="card" style="text-align:center; padding:3.5rem 1.5rem; color:var(--muted-color); border:1px dashed var(--border-color); margin-top:0.5rem; background:rgba(31, 41, 55, 0.4);">
-                    <div style="font-size:2.8rem; margin-bottom:0.75rem;">📂</div>
-                    <h3 style="margin:0 0 0.5rem 0; color:var(--text-color); font-size:1.15rem;">Select a Language to View Files</h3>
-                    <p style="margin:0 auto; font-size:0.9rem; max-width:480px; line-height:1.5;">
-                        Choose a programming language from the dropdown selector above to open its dedicated file inspection dropdown, declared AST symbols, and dependency relationships.
-                    </p>
-                </div>
                 {grouped_files_html}
             </div>
         </section>
@@ -1042,31 +1037,13 @@ class ReportGenerator:
                 selectEl.value = langSlug;
             }}
 
-            const placeholder = document.getElementById('noLangPlaceholder');
-            const panels = document.querySelectorAll('.language-dropdown-panel');
+            if (!langSlug) return;
 
-            if (!langSlug) {{
-                if (placeholder) placeholder.style.display = 'block';
-                panels.forEach(p => {{
-                    p.style.display = 'none';
-                    p.open = false;
-                }});
-                return;
+            const targetPanel = document.getElementById('lang-' + langSlug);
+            if (targetPanel) {{
+                targetPanel.open = true;
+                targetPanel.scrollIntoView({{ behavior: 'smooth', block: 'start' }});
             }}
-
-            if (placeholder) placeholder.style.display = 'none';
-
-            panels.forEach(p => {{
-                if (p.getAttribute('data-language-group') === langSlug) {{
-                    p.style.display = 'block';
-                    p.open = true;
-                }} else {{
-                    p.style.display = 'none';
-                    p.open = false;
-                }}
-            }});
-
-            filterFiles();
         }}
 
         function toggleLanguageDetails(langSectionId) {{
@@ -1080,52 +1057,32 @@ class ReportGenerator:
 
         function filterFiles() {{
             const input = document.getElementById('fileSearch').value.toLowerCase().trim();
-            const selectEl = document.getElementById('languageSelect');
-            let currentLang = selectEl ? selectEl.value : '';
-            const placeholder = document.getElementById('noLangPlaceholder');
+            const cards = document.querySelectorAll('.file-card');
             const panels = document.querySelectorAll('.language-dropdown-panel');
 
-            if (!input && !currentLang) {{
-                if (placeholder) placeholder.style.display = 'block';
-                panels.forEach(p => {{
-                    p.style.display = 'none';
-                    p.open = false;
-                }});
+            if (!input) {{
+                cards.forEach(c => c.style.display = 'block');
+                panels.forEach(p => p.style.display = 'block');
                 return;
             }}
 
-            if (placeholder) placeholder.style.display = 'none';
-
-            const cards = document.querySelectorAll('.file-card');
             cards.forEach(card => {{
                 const path = card.getAttribute('data-filepath') || '';
-                const cardLang = card.getAttribute('data-language') || '';
                 const text = card.innerText.toLowerCase();
-
-                const matchesLang = (!currentLang || cardLang === currentLang);
-                const matchesSearch = (!input || path.includes(input) || text.includes(input));
-
-                if (matchesLang && matchesSearch) {{
+                if (path.includes(input) || text.includes(input)) {{
                     card.style.display = 'block';
                 }} else {{
                     card.style.display = 'none';
                 }}
             }});
 
-            // Manage panel visibility based on matches
             panels.forEach(panel => {{
-                const panelLang = panel.getAttribute('data-language-group') || '';
-                if (currentLang && panelLang !== currentLang) {{
-                    panel.style.display = 'none';
-                    panel.open = false;
+                const hasVisible = Array.from(panel.querySelectorAll('.file-card')).some(c => c.style.display !== 'none');
+                if (hasVisible) {{
+                    panel.style.display = 'block';
+                    panel.open = true;
                 }} else {{
-                    const hasVisible = Array.from(panel.querySelectorAll('.file-card')).some(c => c.style.display !== 'none');
-                    if (hasVisible) {{
-                        panel.style.display = 'block';
-                        panel.open = true;
-                    }} else {{
-                        panel.style.display = 'none';
-                    }}
+                    panel.style.display = 'none';
                 }}
             }});
         }}
