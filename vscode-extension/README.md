@@ -1,6 +1,6 @@
 # 🧠 Workspace Intelligence Agent (WIA) — VS Code & Antigravity IDE Extension
 
-[![VS Code Extension](https://img.shields.io/badge/VS%20Code-v0.1.6-007ACC.svg?logo=visualstudiocode)](https://marketplace.visualstudio.com/)
+[![VS Code Extension](https://img.shields.io/badge/VS%20Code-v0.1.7-007ACC.svg?logo=visualstudiocode)](https://marketplace.visualstudio.com/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](../LICENSE)
 [![Tests](https://img.shields.io/badge/Tests-77%20Passed-brightgreen.svg)](#-automated-testing)
 

@@ -2,10 +2,10 @@
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![Package](https://img.shields.io/badge/PyPI-wia--agent-orange.svg)](https://pypi.org/project/wia-agent/)
-[![VS Code Extension](https://img.shields.io/badge/VS%20Code-v0.1.6-007ACC.svg?logo=visualstudiocode)](https://marketplace.visualstudio.com/)
+[![VS Code Extension](https://img.shields.io/badge/VS%20Code-v0.1.7-007ACC.svg?logo=visualstudiocode)](https://marketplace.visualstudio.com/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/Tests-77%20Extension%20%2F%20185%20Core%20Passed-brightgreen.svg)](#-testing--verification)
-[![Version](https://img.shields.io/badge/Version-v0.1.6-blue.svg)](pyproject.toml)
+[![Version](https://img.shields.io/badge/Version-v0.1.7-blue.svg)](pyproject.toml)
 
 **Workspace Intelligence Agent (WIA)** is a high-performance, graph-grounded workspace intelligence platform, non-autoregressive decision router, and codebase reasoning engine for modern developers and IDEs.
 
@@ -110,7 +110,7 @@ npm test
 npm run package
 
 # Install VSIX into VS Code / Antigravity IDE
-code --install-extension wia-agent-0.1.6.vsix
+code --install-extension wia-agent-0.1.7.vsix
 ```
 
 ---
@@ -251,7 +251,7 @@ Workspace-Intelligence-Agent/
 │   │   ├── registry/                  # Canonical WIA 30-command registry
 │   │   └── test/                      # 77 automated extension unit tests
 │   ├── package.json                   # Extension manifest & command registry
-│   └── wia-agent-0.1.6.vsix           # Packaged extension distribution
+│   └── wia-agent-0.1.7.vsix           # Packaged extension distribution
 ├── tests/                             # Python Core Test Suites (185 tests)
 │   ├── unit/                          # Unit tests for analyzers, core, and graph
 │   ├── integration/                   # Pipeline and end-to-end tests
