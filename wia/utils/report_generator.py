@@ -126,10 +126,40 @@ class ReportGenerator:
             f"the codebase implements functional roles across <em>{html.escape(roles_narrative)}</em>."
         )
 
-        project_narrative_p2 = (
-            f"Execution originates at entrypoints and CLI command modules, delegating core orchestration to service layers. "
-            f"These services interact with storage engines (SQLite store, vector stores, and relationship graphs) to maintain "
-            f"persistent workspace knowledge and generate architectural explanations."
+        entry_files = [
+            f["file_name"] for f in files_data
+            if any(k in f["role"].lower() for k in ("entry", "cli", "route", "controller", "main", "app", "server", "router"))
+        ]
+        service_files = [
+            f["file_name"] for f in files_data
+            if any(k in f["role"].lower() for k in ("service", "core", "orchestrator", "workflow", "engine", "handler", "manager"))
+        ]
+        model_storage_files = [
+            f["file_name"] for f in files_data
+            if any(k in f["role"].lower() for k in ("model", "store", "database", "schema", "entity", "repository", "state"))
+        ]
+
+        flow_clauses = []
+        if entry_files:
+            entry_list_str = ", ".join(f"<code>{html.escape(ef)}</code>" for ef in entry_files[:4])
+            flow_clauses.append(f"Execution originates at detected entrypoint modules ({entry_list_str})")
+        else:
+            flow_clauses.append("Workflows and operations are distributed across functional component tiers")
+
+        if service_files:
+            svc_list_str = ", ".join(f"<code>{html.escape(sf)}</code>" for sf in service_files[:4])
+            flow_clauses.append(f"delegating domain business logic to core services ({svc_list_str})")
+
+        if model_storage_files:
+            storage_list_str = ", ".join(f"<code>{html.escape(mf)}</code>" for mf in model_storage_files[:3])
+            flow_clauses.append(f"coordinated with state and data schema definitions ({storage_list_str})")
+
+        if index.frameworks:
+            fw_names = ", ".join(index.frameworks)
+            flow_clauses.append(f"leveraging <strong>{html.escape(fw_names)}</strong> ecosystem tooling")
+
+        project_narrative_p2 = ", ".join(flow_clauses) + "." if flow_clauses else (
+            f"Static code intelligence has mapped dependencies and structural call graphs across all {total_indexed} files."
         )
 
         project_narrative_p3 = (
@@ -438,6 +468,74 @@ class ReportGenerator:
                 </div>
             </section>
             """
+        # Dynamically determine sample impact analysis file from actual project
+        sample_impact_file = ""
+        for fd in files_data:
+            if fd.get("workspace_dependencies") or fd.get("used_by"):
+                sample_impact_file = fd["file_path"]
+                break
+        if not sample_impact_file and files_data:
+            sample_impact_file = files_data[0]["file_path"]
+        if not sample_impact_file:
+            sample_impact_file = "src/main.py"
+
+        # Dynamically determine project ecosystem & install command
+        if (ws_path / "pyproject.toml").exists() or (ws_path / "setup.py").exists():
+            cmd_install_desc = "Install workspace package (Editable Mode with Python pip):"
+            cmd_install = "pip install -e ."
+        elif (ws_path / "requirements.txt").exists():
+            cmd_install_desc = "Install workspace dependencies via pip requirements:"
+            cmd_install = "pip install -r requirements.txt"
+        elif (ws_path / "package.json").exists():
+            cmd_install_desc = "Install workspace Node/TypeScript dependencies:"
+            cmd_install = "npm install"
+        elif (ws_path / "Cargo.toml").exists():
+            cmd_install_desc = "Build workspace Rust crates via Cargo:"
+            cmd_install = "cargo build"
+        elif (ws_path / "go.mod").exists():
+            cmd_install_desc = "Download workspace Go modules:"
+            cmd_install = "go mod download"
+        else:
+            cmd_install_desc = "Install WIA CLI toolchain (Editable Mode or Pip):"
+            cmd_install = "pip install -e ."
+
+        # Dynamically determine project-specific runtime / test execution command
+        fastapi_file = next(
+            (
+                f["file_path"]
+                for f in files_data
+                if (
+                    "fastapi" in f["file_name"].lower()
+                    or "main.py" in f["file_path"].lower()
+                    or "app.py" in f["file_path"].lower()
+                )
+                and f["file_path"].endswith(".py")
+            ),
+            None,
+        )
+        if "FastAPI" in index.frameworks or (fastapi_file and "app" in fastapi_file):
+            entry_mod = (
+                fastapi_file.replace("/", ".").replace("\\", ".").removesuffix(".py")
+                if fastapi_file
+                else "app.main"
+            )
+            cmd_runtime_desc = "Launch FastAPI application server / REST intelligence API:"
+            cmd_runtime = f"uvicorn {entry_mod}:app --reload --port 8000"
+        elif "Django" in index.frameworks or (ws_path / "manage.py").exists():
+            cmd_runtime_desc = "Launch Django development server:"
+            cmd_runtime = "python manage.py runserver"
+        elif "Flask" in index.frameworks:
+            cmd_runtime_desc = "Launch Flask application server:"
+            cmd_runtime = "flask run"
+        elif (ws_path / "package.json").exists():
+            cmd_runtime_desc = "Launch development server / frontend bundle:"
+            cmd_runtime = "npm run dev"
+        elif (ws_path / "tests").exists() or (ws_path / "pytest.ini").exists():
+            cmd_runtime_desc = "Execute automated test verification suite:"
+            cmd_runtime = "pytest -v"
+        else:
+            cmd_runtime_desc = "Query architectural intelligence and component workflows:"
+            cmd_runtime = f'wia ask "What are the primary execution workflows in {ws_name}?"'
 
         report_json_data = json.dumps({
             "indexed_at": index.indexed_at,
@@ -896,9 +994,9 @@ class ReportGenerator:
                     <button class="copy-btn" onclick="copyFromBox(this)">Copy</button>
                 </div>
 
-                <div class="cmd-desc">2. Install WIA CLI toolchain (Editable Mode or Pip):</div>
+                <div class="cmd-desc">2. {cmd_install_desc}</div>
                 <div class="cmd-box">
-                    <span class="cmd-text">pip install -e .</span>
+                    <span class="cmd-text">{cmd_install}</span>
                     <button class="copy-btn" onclick="copyFromBox(this)">Copy</button>
                 </div>
 
@@ -916,13 +1014,13 @@ class ReportGenerator:
 
                 <div class="cmd-desc">5. Query codebase intelligence and retrieve grounded evidence:</div>
                 <div class="cmd-box">
-                    <span class="cmd-text">wia ask "Explain the system architecture, entrypoints, and data flow"</span>
+                    <span class="cmd-text">wia ask "Explain the system architecture, entrypoints, and data flow of {ws_name}"</span>
                     <button class="copy-btn" onclick="copyFromBox(this)">Copy</button>
                 </div>
 
-                <div class="cmd-desc">6. Perform Blast-Radius / Impact Analysis before modifying a file:</div>
+                <div class="cmd-desc">6. Perform Blast-Radius / Impact Analysis on project files:</div>
                 <div class="cmd-box">
-                    <span class="cmd-text">wia impact wia/core/retrieval.py</span>
+                    <span class="cmd-text">wia impact {sample_impact_file}</span>
                     <button class="copy-btn" onclick="copyFromBox(this)">Copy</button>
                 </div>
 
@@ -932,9 +1030,9 @@ class ReportGenerator:
                     <button class="copy-btn" onclick="copyFromBox(this)">Copy</button>
                 </div>
 
-                <div class="cmd-desc">8. Launch backend FastAPI server / REST intelligence API:</div>
+                <div class="cmd-desc">8. {cmd_runtime_desc}</div>
                 <div class="cmd-box">
-                    <span class="cmd-text">uvicorn backend.app.main:app --reload --port 8000</span>
+                    <span class="cmd-text">{cmd_runtime}</span>
                     <button class="copy-btn" onclick="copyFromBox(this)">Copy</button>
                 </div>
             </div>
