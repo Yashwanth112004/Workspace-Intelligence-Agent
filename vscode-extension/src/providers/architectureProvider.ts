@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as path from 'path';
 import { WiaApiClient } from '../apiClient';
 
 export class ArchitectureTreeItem extends vscode.TreeItem {
@@ -35,7 +37,7 @@ export class ArchitectureTreeProvider implements vscode.TreeDataProvider<Archite
 
     constructor(private apiClient: WiaApiClient) {}
 
-    setRepository(repoId: string, rootPath: string) {
+    setRepository(repoId: string | null, rootPath: string | null) {
         this.repoId = repoId;
         this.rootPath = rootPath;
         this.refresh();
@@ -49,37 +51,103 @@ export class ArchitectureTreeProvider implements vscode.TreeDataProvider<Archite
         return element;
     }
 
+    private getLocalReportData(): any {
+        if (!this.rootPath) return null;
+        const candidates = [
+            path.join(this.rootPath, '.wia', 'report_data.json'),
+            path.join(this.rootPath, 'Workspace-Intelligence-Agent', '.wia', 'report_data.json')
+        ];
+        for (const cand of candidates) {
+            if (fs.existsSync(cand)) {
+                try {
+                    return JSON.parse(fs.readFileSync(cand, 'utf8'));
+                } catch (e) {}
+            }
+        }
+        return null;
+    }
+
     async getChildren(element?: ArchitectureTreeItem): Promise<ArchitectureTreeItem[]> {
-        if (!this.repoId) {
-            return [new ArchitectureTreeItem('Run "WIA: Scan Workspace" to index codebase', vscode.TreeItemCollapsibleState.None)];
+        const localData = this.getLocalReportData();
+
+        // 1. Try API Client if repoId is available
+        if (this.repoId) {
+            try {
+                const arch = await this.apiClient.getArchitecture(this.repoId);
+                if (!element) {
+                    const nodes: ArchitectureTreeItem[] = [];
+                    nodes.push(new ArchitectureTreeItem(`Architecture Nodes (${arch.total_nodes || 0})`, vscode.TreeItemCollapsibleState.Expanded));
+                    nodes.push(new ArchitectureTreeItem(`Relationships (${arch.total_edges || 0})`, vscode.TreeItemCollapsibleState.None));
+                    return nodes;
+                }
+
+                if (element.label.startsWith('Architecture Nodes')) {
+                    return (arch.nodes || []).slice(0, 50).map((n: any) => {
+                        const fullPath = this.rootPath && n.file ? path.join(this.rootPath, n.file) : undefined;
+                        return new ArchitectureTreeItem(
+                            `[${n.type || 'module'}] ${n.name}`,
+                            vscode.TreeItemCollapsibleState.None,
+                            n.file,
+                            `${n.name} (${n.type})`,
+                            fullPath,
+                            0
+                        );
+                    });
+                }
+                return [];
+            } catch (e) {
+                // Fallback to local report data below
+            }
         }
 
-        try {
-            const arch = await this.apiClient.getArchitecture(this.repoId);
+        // 2. Offline Fallback from .wia/report_data.json
+        if (localData) {
+            const stats = localData.stats || {};
+            const frameworks = localData.frameworks || [];
+            const languages = Object.keys(localData.languages || {});
+
             if (!element) {
-                const nodes: ArchitectureTreeItem[] = [];
-                nodes.push(new ArchitectureTreeItem(`Architecture Nodes (${arch.total_nodes || 0})`, vscode.TreeItemCollapsibleState.Expanded));
-                nodes.push(new ArchitectureTreeItem(`Relationships (${arch.total_edges || 0})`, vscode.TreeItemCollapsibleState.None));
-                return nodes;
+                return [
+                    new ArchitectureTreeItem(`Indexed Files (${stats.total_indexed || 0})`, vscode.TreeItemCollapsibleState.Collapsed, 'Local Index'),
+                    new ArchitectureTreeItem(`Frameworks (${frameworks.length})`, vscode.TreeItemCollapsibleState.Expanded, frameworks.slice(0, 3).join(', ')),
+                    new ArchitectureTreeItem(`Languages (${languages.length})`, vscode.TreeItemCollapsibleState.Collapsed, languages.slice(0, 3).join(', ')),
+                    new ArchitectureTreeItem(`Dependencies (${stats.dependencies_count || 0})`, vscode.TreeItemCollapsibleState.None, `${stats.dependency_conflicts_count || 0} conflicts`)
+                ];
             }
 
-            if (element.label.startsWith('Architecture Nodes')) {
-                return (arch.nodes || []).slice(0, 30).map((n: any) => {
-                    const fullPath = this.rootPath && n.file ? `${this.rootPath}/${n.file}` : undefined;
-                    return new ArchitectureTreeItem(
-                        `[${n.type}] ${n.name}`,
-                        vscode.TreeItemCollapsibleState.None,
-                        n.file,
-                        `${n.name} (${n.type})`,
-                        fullPath,
-                        0
-                    );
+            if (element.label.startsWith('Frameworks')) {
+                return frameworks.map((fw: string) => new ArchitectureTreeItem(`🏛️ ${fw}`, vscode.TreeItemCollapsibleState.None, 'Framework'));
+            }
+
+            if (element.label.startsWith('Languages')) {
+                return languages.map((lang: string) => {
+                    const count = localData.languages[lang];
+                    return new ArchitectureTreeItem(`📄 ${lang}`, vscode.TreeItemCollapsibleState.None, `${count} files`);
                 });
             }
 
+            if (element.label.startsWith('Indexed Files')) {
+                const candidates = [
+                    path.join(this.rootPath || '', '.wia', 'index.json'),
+                    path.join(this.rootPath || '', 'Workspace-Intelligence-Agent', '.wia', 'index.json')
+                ];
+                for (const cand of candidates) {
+                    if (fs.existsSync(cand)) {
+                        try {
+                            const idx = JSON.parse(fs.readFileSync(cand, 'utf8'));
+                            const files = Object.keys(idx.files || {}).slice(0, 40);
+                            return files.map(f => {
+                                const fullPath = this.rootPath ? path.join(this.rootPath, f) : f;
+                                return new ArchitectureTreeItem(f, vscode.TreeItemCollapsibleState.None, idx.files[f]?.language, undefined, fullPath);
+                            });
+                        } catch (e) {}
+                    }
+                }
+            }
+
             return [];
-        } catch (e) {
-            return [new ArchitectureTreeItem('Connect to WIA Daemon...', vscode.TreeItemCollapsibleState.None)];
         }
+
+        return [new ArchitectureTreeItem('Run "WIA: Scan Workspace" to index codebase', vscode.TreeItemCollapsibleState.None)];
     }
 }

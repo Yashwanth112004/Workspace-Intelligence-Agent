@@ -58,15 +58,48 @@ class WiaChatPanel {
         this.rootPath = rootPath;
     }
     async handleUserQuestion(text) {
-        if (!this.repoId) {
-            this._panel.webview.postMessage({
-                command: 'addMessage',
-                sender: 'assistant',
-                text: '⚠️ **Workspace Not Indexed**: Please index this workspace first using **WIA: Scan Workspace** before querying the AI engine.',
-                citations: [],
-                showScanBtn: true
-            });
+        if (!text || !text.trim())
             return;
+        if (!this.repoId) {
+            // Check if we can determine root path from workspace
+            if (!this.rootPath && vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+                this.rootPath = vscode.workspace.workspaceFolders[0].uri.fsPath;
+            }
+            if (!this.rootPath) {
+                this._panel.webview.postMessage({
+                    command: 'addMessage',
+                    sender: 'assistant',
+                    text: '⚠️ **Workspace Required**: Please open a project workspace folder to query the WIA AI engine.',
+                    citations: [],
+                    showScanBtn: false
+                });
+                return;
+            }
+            this._panel.webview.postMessage({
+                command: 'setThinking',
+                isThinking: true
+            });
+            try {
+                // Attempt automatic on-demand ingestion/query
+                const ingestRes = await this.apiClient.ingest(this.rootPath, 'Workspace');
+                this.repoId = ingestRes.repo_id;
+            }
+            catch {
+                // If daemon is not running, prompt user to start daemon or scan
+                this._panel.webview.postMessage({
+                    command: 'setThinking',
+                    isThinking: false
+                });
+                this._panel.webview.postMessage({
+                    command: 'addMessage',
+                    sender: 'assistant',
+                    text: '⚠️ **WIA Daemon Not Connected**: Please start the WIA engine daemon or run **Scan Workspace** to query the AI assistant.',
+                    citations: [],
+                    showDaemonBtn: true,
+                    showScanBtn: true
+                });
+                return;
+            }
         }
         this._panel.webview.postMessage({
             command: 'setThinking',
@@ -94,7 +127,7 @@ class WiaChatPanel {
             this._panel.webview.postMessage({
                 command: 'addMessage',
                 sender: 'assistant',
-                text: `❌ **WIA Engine Error**: ${e.message}\n\n*Ensure the local backend daemon is running on port 8000.*`,
+                text: `❌ **WIA Engine Notice**: ${e.message}\n\n*Make sure the local daemon is running, or use the interactive WIA Agent sidebar for offline intelligence.*`,
                 citations: [],
                 showDaemonBtn: true
             });
@@ -124,6 +157,7 @@ class WiaChatPanel {
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src * 'unsafe-inline' 'unsafe-eval' data: blob:; script-src * 'unsafe-inline' 'unsafe-eval' vscode-resource:; style-src * 'unsafe-inline'; font-src * data:; img-src * data: blob: vscode-resource:;">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>WIA AI Assistant</title>
     <style>
@@ -419,6 +453,52 @@ class WiaChatPanel {
             chat.appendChild(div);
             chat.scrollTop = chat.scrollHeight;
         }
+
+        // Document-wide delegated event handler
+        document.addEventListener('click', function(e) {
+            const target = e.target;
+            if (!target) return;
+
+            // Ask / Send button
+            if (target.classList.contains('send-btn') || target.closest('.send-btn')) {
+                e.preventDefault();
+                sendMsg();
+                return;
+            }
+
+            // Prompt chips
+            const chip = target.closest('.chip');
+            if (chip) {
+                e.preventDefault();
+                const text = chip.getAttribute('data-prompt') || chip.textContent.replace(/^[^\w]+/, '').trim();
+                sendPrompt(text);
+                return;
+            }
+
+            // Action buttons
+            const actionBtn = target.closest('.action-btn');
+            if (actionBtn) {
+                e.preventDefault();
+                if (actionBtn.textContent.includes('Scan Workspace')) {
+                    triggerScan();
+                } else if (actionBtn.textContent.includes('Start WIA Daemon')) {
+                    triggerDaemon();
+                }
+                return;
+            }
+
+            // Citation buttons
+            const citeBtn = target.closest('.cite-btn');
+            if (citeBtn) {
+                e.preventDefault();
+                const fp = citeBtn.getAttribute('data-filepath');
+                const line = parseInt(citeBtn.getAttribute('data-line') || '1', 10);
+                if (fp) {
+                    vscode.postMessage({ command: 'openCitation', filePath: fp, line: line });
+                }
+                return;
+            }
+        });
 
         window.addEventListener('message', event => {
             const msg = event.data;

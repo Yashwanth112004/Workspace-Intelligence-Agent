@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as path from 'path';
 import { WiaApiClient } from '../apiClient';
 
 export class SymbolTreeItem extends vscode.TreeItem {
@@ -35,7 +37,7 @@ export class SymbolsTreeProvider implements vscode.TreeDataProvider<SymbolTreeIt
 
     constructor(private apiClient: WiaApiClient) {}
 
-    setRepository(repoId: string, rootPath: string) {
+    setRepository(repoId: string | null, rootPath: string | null) {
         this.repoId = repoId;
         this.rootPath = rootPath;
         this.refresh();
@@ -49,49 +51,88 @@ export class SymbolsTreeProvider implements vscode.TreeDataProvider<SymbolTreeIt
         return element;
     }
 
+    private getLocalSymbols(): any[] {
+        if (!this.rootPath) return [];
+        const candidates = [
+            path.join(this.rootPath, '.wia', 'index.json'),
+            path.join(this.rootPath, 'Workspace-Intelligence-Agent', '.wia', 'index.json')
+        ];
+
+        for (const cand of candidates) {
+            if (fs.existsSync(cand)) {
+                try {
+                    const idx = JSON.parse(fs.readFileSync(cand, 'utf8'));
+                    const symbols: any[] = [];
+                    for (const [relPath, fileObj] of Object.entries<any>(idx.files || {})) {
+                        const fileSyms = fileObj.extra_metadata?.symbols || [];
+                        for (const s of fileSyms) {
+                            symbols.push({
+                                name: s.name,
+                                symbol_type: s.symbol_type || 'function',
+                                file_path: relPath,
+                                start_line: s.start_line || 1,
+                                signature: s.signature || s.name
+                            });
+                        }
+                    }
+                    return symbols;
+                } catch (e) {}
+            }
+        }
+        return [];
+    }
+
     async getChildren(element?: SymbolTreeItem): Promise<SymbolTreeItem[]> {
-        if (!this.repoId) {
-            return [new SymbolTreeItem('Index workspace to view symbols', vscode.TreeItemCollapsibleState.None)];
+        let symbols: any[] = [];
+
+        // 1. Try API Client
+        if (this.repoId) {
+            try {
+                const res = await this.apiClient.searchSymbols(this.repoId, '');
+                symbols = res.symbols || [];
+            } catch (e) {}
         }
 
-        try {
-            const res = await this.apiClient.searchSymbols(this.repoId, '');
-            const symbols = res.symbols || [];
-
-            if (!element) {
-                const functions = symbols.filter((s: any) => s.symbol_type === 'function');
-                const classes = symbols.filter((s: any) => s.symbol_type === 'class');
-                const imports = symbols.filter((s: any) => s.symbol_type === 'import');
-
-                return [
-                    new SymbolTreeItem(`Functions (${functions.length})`, vscode.TreeItemCollapsibleState.Expanded),
-                    new SymbolTreeItem(`Classes (${classes.length})`, vscode.TreeItemCollapsibleState.Collapsed),
-                    new SymbolTreeItem(`Imports (${imports.length})`, vscode.TreeItemCollapsibleState.Collapsed)
-                ];
-            }
-
-            let filtered = [];
-            if (element.label.startsWith('Functions')) {
-                filtered = symbols.filter((s: any) => s.symbol_type === 'function');
-            } else if (element.label.startsWith('Classes')) {
-                filtered = symbols.filter((s: any) => s.symbol_type === 'class');
-            } else if (element.label.startsWith('Imports')) {
-                filtered = symbols.filter((s: any) => s.symbol_type === 'import');
-            }
-
-            return filtered.slice(0, 40).map((s: any) => {
-                const fullPath = this.rootPath ? `${this.rootPath}/${s.file_path}` : s.file_path;
-                return new SymbolTreeItem(
-                    s.name,
-                    vscode.TreeItemCollapsibleState.None,
-                    `${s.file_path}:${s.start_line}`,
-                    s.signature || s.name,
-                    fullPath,
-                    s.start_line
-                );
-            });
-        } catch (e) {
-            return [new SymbolTreeItem('Waiting for WIA Engine...', vscode.TreeItemCollapsibleState.None)];
+        // 2. Fallback to Local Index
+        if (symbols.length === 0) {
+            symbols = this.getLocalSymbols();
         }
+
+        if (symbols.length === 0) {
+            return [new SymbolTreeItem('Run "WIA: Scan Workspace" to index AST symbols', vscode.TreeItemCollapsibleState.None)];
+        }
+
+        const functions = symbols.filter((s: any) => s.symbol_type === 'function' || s.symbol_type === 'method');
+        const classes = symbols.filter((s: any) => s.symbol_type === 'class');
+        const imports = symbols.filter((s: any) => s.symbol_type === 'import' || s.symbol_type === 'variable');
+
+        if (!element) {
+            return [
+                new SymbolTreeItem(`Functions & Methods (${functions.length})`, vscode.TreeItemCollapsibleState.Expanded),
+                new SymbolTreeItem(`Classes (${classes.length})`, vscode.TreeItemCollapsibleState.Collapsed),
+                new SymbolTreeItem(`Imports & Declarations (${imports.length})`, vscode.TreeItemCollapsibleState.Collapsed)
+            ];
+        }
+
+        let filtered: any[] = [];
+        if (element.label.startsWith('Functions')) {
+            filtered = functions;
+        } else if (element.label.startsWith('Classes')) {
+            filtered = classes;
+        } else if (element.label.startsWith('Imports')) {
+            filtered = imports;
+        }
+
+        return filtered.slice(0, 50).map((s: any) => {
+            const fullPath = this.rootPath ? path.join(this.rootPath, s.file_path) : s.file_path;
+            return new SymbolTreeItem(
+                s.name,
+                vscode.TreeItemCollapsibleState.None,
+                `${path.basename(s.file_path)}:${s.start_line}`,
+                `${s.signature || s.name}\n${s.file_path}:${s.start_line}`,
+                fullPath,
+                s.start_line
+            );
+        });
     }
 }

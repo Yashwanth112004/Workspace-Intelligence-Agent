@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as path from 'path';
 import { WiaApiClient, ImpactResponse } from '../apiClient';
 
 export class WiaImpactPanel {
@@ -75,36 +77,98 @@ export class WiaImpactPanel {
         }
     }
 
+    private getLocalSymbolImpact(target: string): ImpactResponse | null {
+        if (!this.rootPath) return null;
+        const candidates = [
+            path.join(this.rootPath, '.wia', 'index.json'),
+            path.join(this.rootPath, 'Workspace-Intelligence-Agent', '.wia', 'index.json')
+        ];
+
+        for (const cand of candidates) {
+            if (fs.existsSync(cand)) {
+                try {
+                    const idx = JSON.parse(fs.readFileSync(cand, 'utf8'));
+                    let targetDef: any = null;
+                    const callers: any[] = [];
+                    const dependentFiles = new Set<string>();
+
+                    for (const [relPath, fileObj] of Object.entries<any>(idx.files || {})) {
+                        const symbols = fileObj.extra_metadata?.symbols || [];
+                        for (const s of symbols) {
+                            if (s.name.toLowerCase() === target.toLowerCase()) {
+                                targetDef = { ...s, file_path: relPath };
+                            }
+                            if (s.signature && s.signature.includes(target)) {
+                                callers.push({
+                                    symbol: s.name,
+                                    file_path: relPath,
+                                    line: s.start_line,
+                                    call_type: 'function_call'
+                                });
+                                dependentFiles.add(relPath);
+                            }
+                        }
+                    }
+
+                    return {
+                        repo_id: 'local',
+                        target: target,
+                        target_type: targetDef?.symbol_type || 'symbol',
+                        risk_level: callers.length > 10 ? 'HIGH' : (callers.length > 3 ? 'MEDIUM' : 'LOW'),
+                        direct_impact_count: callers.length,
+                        direct_impacts: callers.map(c => ({
+                            name: c.symbol,
+                            symbol_type: 'function',
+                            file_path: c.file_path,
+                            line: c.line
+                        })),
+                        affected_files_count: dependentFiles.size,
+                        affected_files: Array.from(dependentFiles),
+                        explanation: `Symbol '${target}' is referenced by ${callers.length} downstream caller(s) across ${dependentFiles.size} file(s).`
+                    };
+                } catch (e) {}
+            }
+        }
+        return null;
+    }
+
     public async loadImpact(target: string) {
-        if (!this.repoId) {
+        this._panel.webview.postMessage({ command: 'setLoading', target });
+
+        // 1. Try API Client
+        if (this.repoId) {
+            try {
+                const data: ImpactResponse = await this.apiClient.analyzeImpact(this.repoId, target);
+                this._panel.webview.postMessage({
+                    command: 'renderImpact',
+                    data: data,
+                    target: target
+                });
+                return;
+            } catch (e: any) {}
+        }
+
+        // 2. Offline Fallback from index.json
+        const local = this.getLocalSymbolImpact(target);
+        if (local) {
             this._panel.webview.postMessage({
-                command: 'showError',
-                message: 'No active repository indexed. Run "WIA: Scan Workspace" first.'
+                command: 'renderImpact',
+                data: local,
+                target: target
             });
             return;
         }
 
-        this._panel.webview.postMessage({ command: 'setLoading', target });
-
-        try {
-            const data: ImpactResponse = await this.apiClient.analyzeImpact(this.repoId, target);
-            this._panel.webview.postMessage({
-                command: 'renderImpact',
-                data: data,
-                target: target
-            });
-        } catch (e: any) {
-            this._panel.webview.postMessage({
-                command: 'showError',
-                message: `Failed to analyze impact for '${target}': ${e.message}`
-            });
-        }
+        this._panel.webview.postMessage({
+            command: 'showError',
+            message: `No active repository indexed or symbol '${target}' not found. Run "WIA: Scan Workspace" first.`
+        });
     }
 
     private openFileAtLine(relPath: string, line?: number) {
         if (!this.rootPath || !relPath) return;
         const normalized = relPath.replace(/^[/\\]+/, '');
-        const fullPath = vscode.Uri.file(`${this.rootPath}/${normalized}`);
+        const fullPath = vscode.Uri.file(path.join(this.rootPath, normalized));
         const targetLine = Math.max(0, (line || 1) - 1);
         vscode.window.showTextDocument(fullPath, {
             selection: new vscode.Range(targetLine, 0, targetLine, 0)
@@ -125,6 +189,7 @@ export class WiaImpactPanel {
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src * 'unsafe-inline' 'unsafe-eval' data: blob:; script-src * 'unsafe-inline' 'unsafe-eval' vscode-resource:; style-src * 'unsafe-inline'; font-src * data:; img-src * data: blob: vscode-resource:;">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>WIA Change Impact Inspector</title>
     <style>
@@ -338,6 +403,35 @@ export class WiaImpactPanel {
         function traceFlow(symbol) {
             vscode.postMessage({ command: 'traceFlow', symbol: symbol });
         }
+
+        // Global event delegation
+        document.addEventListener('click', function(e) {
+            const target = e.target;
+            if (!target) return;
+
+            if (target.classList.contains('btn-primary') || target.closest('.btn-primary')) {
+                e.preventDefault();
+                searchTarget();
+                return;
+            }
+
+            const openBtn = target.closest('[data-openfile]');
+            if (openBtn) {
+                e.preventDefault();
+                const fp = openBtn.getAttribute('data-openfile');
+                const ln = parseInt(openBtn.getAttribute('data-line') || '1', 10);
+                if (fp) openFile(fp, ln);
+                return;
+            }
+
+            const traceBtn = target.closest('[data-tracesymbol]');
+            if (traceBtn) {
+                e.preventDefault();
+                const sym = traceBtn.getAttribute('data-tracesymbol');
+                if (sym) traceFlow(sym);
+                return;
+            }
+        });
 
         window.addEventListener('message', event => {
             const msg = event.data;

@@ -191,7 +191,7 @@ exports.WIA_OPERATION_REGISTRY = {
     'component.explain': {
         name: 'component.explain',
         category: 'component',
-        description: 'Generate 13-section technical explanation for file, notebook, or symbol',
+        description: 'Generate technical explanation for file, notebook, or symbol',
         requiresTrust: false,
         isDestructive: false,
         cliSubcommand: 'explain'
@@ -203,6 +203,38 @@ exports.WIA_OPERATION_REGISTRY = {
         requiresTrust: false,
         isDestructive: false,
         cliSubcommand: 'impact'
+    },
+    'code.flow': {
+        name: 'code.flow',
+        category: 'component',
+        description: 'Trace code execution call flow hierarchy and call paths',
+        requiresTrust: false,
+        isDestructive: false,
+        cliSubcommand: 'flow'
+    },
+    'git.diff': {
+        name: 'git.diff',
+        category: 'repository',
+        description: 'Analyze git diff churn, changed symbols, and impact',
+        requiresTrust: false,
+        isDestructive: false,
+        cliSubcommand: 'diff'
+    },
+    'report.generate': {
+        name: 'report.generate',
+        category: 'workspace',
+        description: 'Generate interactive HTML intelligence report',
+        requiresTrust: true,
+        isDestructive: false,
+        cliSubcommand: 'report'
+    },
+    'workspace.ask': {
+        name: 'workspace.ask',
+        category: 'workspace',
+        description: 'Query AI reasoning agent grounded in codebase RAG context',
+        requiresTrust: false,
+        isDestructive: false,
+        cliSubcommand: 'ask'
     }
 };
 function isValidOperation(opName) {

@@ -173,11 +173,99 @@ class ASTParser:
 
     @classmethod
     def parse_regex_fallback(cls, content: str) -> list[SymbolNode]:
-        """Regex-based fallback symbol parser for multi-language or non-standard syntax."""
+        """Regex-based symbol and import parser for TypeScript, JavaScript, Go, Rust, and others."""
         symbols: list[SymbolNode] = []
         lines = content.splitlines()
 
+        # TypeScript / ES6 / CommonJS import patterns
+        ts_import_re = re.compile(
+            r"import\s+(?:(?:type\s+)?(?:\{\s*([^}]+)\s*\}|(?:\*\s+as\s+)?([A-Za-z0-9_]+))\s+from\s+)?['\"]([^'\"]+)['\"]"
+        )
+        require_re = re.compile(
+            r"(?:const|let|var)\s+(?:\{\s*([^}]+)\s*\}|([A-Za-z0-9_]+))\s*=\s*require\(['\"]([^'\"]+)['\"]\)"
+        )
+
         for idx, line in enumerate(lines, start=1):
+            line_str = line.strip()
+
+            # 1. Check ES6 / TypeScript / CommonJS Imports
+            m_ts = ts_import_re.search(line_str)
+            if m_ts:
+                named_syms, default_sym, mod_path = m_ts.groups()
+                mod = (mod_path or "").strip()
+                if mod:
+                    imported_names: list[str] = []
+                    if named_syms:
+                        for s in named_syms.split(","):
+                            cleaned = s.strip().split(" as ")[0].strip()
+                            if cleaned:
+                                imported_names.append(cleaned)
+                                symbols.append(
+                                    SymbolNode(
+                                        name=cleaned,
+                                        symbol_type="import",
+                                        line_number=idx,
+                                        end_line_number=idx,
+                                        parent_symbol=mod,
+                                    )
+                                )
+                    elif default_sym:
+                        imported_names.append(default_sym.strip())
+                        symbols.append(
+                            SymbolNode(
+                                name=default_sym.strip(),
+                                symbol_type="import",
+                                line_number=idx,
+                                end_line_number=idx,
+                                parent_symbol=mod,
+                            )
+                        )
+
+                    symbols.append(
+                        SymbolNode(
+                            name=mod,
+                            symbol_type="import",
+                            line_number=idx,
+                            end_line_number=idx,
+                            parameters=imported_names,
+                        )
+                    )
+                    continue
+
+            m_req = require_re.search(line_str)
+            if m_req:
+                dest, single, mod_path = m_req.groups()
+                mod = (mod_path or "").strip()
+                if mod:
+                    imported_names = []
+                    if dest:
+                        for s in dest.split(","):
+                            c = s.strip()
+                            if c:
+                                imported_names.append(c)
+                                symbols.append(
+                                    SymbolNode(
+                                        name=c,
+                                        symbol_type="import",
+                                        line_number=idx,
+                                        end_line_number=idx,
+                                        parent_symbol=mod,
+                                    )
+                                )
+                    elif single:
+                        imported_names.append(single.strip())
+                    symbols.append(
+                        SymbolNode(
+                            name=mod,
+                            symbol_type="import",
+                            line_number=idx,
+                            end_line_number=idx,
+                            parameters=imported_names,
+                        )
+                    )
+                    continue
+
+            # 2. Classes, Interfaces, Types
             class_match = CLASS_PATTERN.search(line)
             if class_match:
                 bases = [class_match.group(2)] if class_match.group(2) else []
@@ -192,6 +280,7 @@ class ASTParser:
                 )
                 continue
 
+            # 3. Functions
             func_match = FUNC_PATTERN.search(line)
             if func_match:
                 symbols.append(
@@ -204,11 +293,13 @@ class ASTParser:
                 )
                 continue
 
+            # 4. Generic import fallback
             import_match = IMPORT_PATTERN.search(line)
             if import_match:
+                raw_mod = import_match.group(1).strip("'\"")
                 symbols.append(
                     SymbolNode(
-                        name=import_match.group(1),
+                        name=raw_mod,
                         symbol_type="import",
                         line_number=idx,
                         end_line_number=idx,

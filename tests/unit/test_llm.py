@@ -29,7 +29,7 @@ def test_llm_service_ask_intent_queries(tmp_path: Path):
             "wia/services/indexing_service.py": FileRecord("wia/services/indexing_service.py", 200, 1.0, ".py", language="Python", indexing_status=IndexingStatus.INDEXED),
         }
     )
-    service = LLMService()
+    service = LLMService(offline=True)
 
     # 1. Architecture intent query
     ans_arch = service.ask_question("How is the WIA CLI structured?", index)

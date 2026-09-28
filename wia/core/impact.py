@@ -56,14 +56,24 @@ class ImpactAnalyzer:
         if direct_file_id in graph.nodes and graph.nodes[direct_file_id].node_type == "file":
             file_node = graph.nodes[direct_file_id]
 
-        # 2. Single-pass candidate collection if not directly resolved
+        # 2. File path ending or filename/stem match
         if not file_node:
-            for node_id, node in graph.nodes.items():
-                if node.node_type == "file":
-                    if node.file_path == target_norm or node.file_path.endswith("/" + target_norm) or Path(node.file_path).name == target_norm:
-                        file_node = node
-                        break
-                elif node.name == symbol_name or f":{symbol_name}" in node_id:
+            for node in graph.nodes.values():
+                if node.node_type == "file" and (
+                    node.file_path == target_norm
+                    or node.file_path.endswith("/" + target_norm)
+                    or Path(node.file_path).name.lower() == target_norm.lower()
+                    or Path(node.file_path).stem.lower() == target_norm.lower()
+                ):
+                    file_node = node
+                    break
+
+        # 3. Search for matching symbol nodes if not a file
+        if not file_node:
+            for node in graph.nodes.values():
+                if node.node_type != "file" and (
+                    node.name == symbol_name or f":{symbol_name}" in node.node_id
+                ):
                     symbol_nodes.append(node)
 
         # 3. Fallback search by substring if no exact match
@@ -109,12 +119,61 @@ class ImpactAnalyzer:
         # Find direct callers/importers
         incoming = graph.get_incoming_edges(target_node.node_id)
         if file_node:
+            # 6a. Direct file-to-file incoming edges
             for edge in incoming:
                 src = graph.nodes.get(edge.source_id)
                 if src and src.file_path and src.file_path != defining_file:
                     direct_files.add(src.file_path)
                     direct_dependents.append(f"{src.file_path} ({edge.relation_type})")
                     evidence.append(f"`{src.file_path}` has `{edge.relation_type}` relationship to `{defining_file}`")
+
+            # 6b. Check incoming edges to ANY symbol defined inside this file
+            for node in graph.nodes.values():
+                if node.file_path == defining_file and node.node_id != file_node.node_id:
+                    for sym_edge in graph.get_incoming_edges(node.node_id):
+                        src = graph.nodes.get(sym_edge.source_id)
+                        if src and src.file_path and src.file_path != defining_file:
+                            direct_files.add(src.file_path)
+                            lbl = f"{src.file_path} (references {node.name})"
+                            if lbl not in direct_dependents:
+                                direct_dependents.append(lbl)
+                                evidence.append(f"`{src.file_path}` {sym_edge.relation_type.lower()}s `{node.name}` defined in `{defining_file}`")
+
+            # 6c. Cross-reference index file import declarations
+            def_stem = Path(defining_file).stem
+            def_name = Path(defining_file).name
+            def_syms = set()
+            if defining_file in index.files:
+                def_syms = {s.get("name") for s in index.files[defining_file].extra_metadata.get("symbols", []) if s.get("name")}
+
+            for o_path, o_rec in index.files.items():
+                if o_path == defining_file:
+                    continue
+                o_imports = set(o_rec.extra_metadata.get("imports", []))
+                for s in o_rec.extra_metadata.get("symbols", []):
+                    if s.get("symbol_type") == "import":
+                        if s.get("name"):
+                            o_imports.add(s.get("name"))
+                        if s.get("parent_symbol"):
+                            o_imports.add(s.get("parent_symbol"))
+
+                for imp in o_imports:
+                    if not imp:
+                        continue
+                    clean_imp = imp.strip().replace("\\", "/")
+                    if (
+                        clean_imp == def_stem
+                        or clean_imp == def_name
+                        or clean_imp.endswith("/" + def_stem)
+                        or clean_imp.endswith("/" + def_name)
+                        or clean_imp in def_syms
+                    ):
+                        if o_path not in direct_files:
+                            direct_files.add(o_path)
+                            lbl = f"{o_path} (imports {def_name})"
+                            if lbl not in direct_dependents:
+                                direct_dependents.append(lbl)
+                                evidence.append(f"`{o_path}` imports `{imp}` from `{defining_file}`")
         else:
             for edge in incoming:
                 src = graph.nodes.get(edge.source_id)

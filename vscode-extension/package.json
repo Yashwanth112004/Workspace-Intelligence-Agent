@@ -44,6 +44,11 @@
     "views": {
       "wia-container": [
         {
+          "type": "webview",
+          "id": "wia-agent-view",
+          "name": "🤖 WIA Agent & Chat"
+        },
+        {
           "id": "wia-architecture",
           "name": "🏛️ Architecture & Subsystems"
         },
@@ -64,18 +69,118 @@
         "category": "WIA"
       },
       {
-        "command": "wia.scanWorkspace",
-        "title": "WIA: Scan & Ingest Workspace",
-        "category": "WIA"
-      },
-      {
         "command": "wia.openChat",
         "title": "WIA: Open AI Agent Chat",
         "category": "WIA"
       },
       {
+        "command": "wia.scanWorkspace",
+        "title": "WIA: Scan & Ingest Workspace",
+        "category": "WIA"
+      },
+      {
+        "command": "wia.architecture",
+        "title": "WIA: Show Architecture Map",
+        "category": "WIA"
+      },
+      {
+        "command": "wia.showArchitecturePanel",
+        "title": "WIA: Open Visual Architecture Map",
+        "category": "WIA"
+      },
+      {
+        "command": "wia.explainArchitecture",
+        "title": "WIA: Explain Code Architecture",
+        "category": "WIA"
+      },
+      {
+        "command": "wia.deps",
+        "title": "WIA: Analyze Dependencies & Conflicts",
+        "category": "WIA"
+      },
+      {
+        "command": "wia.status",
+        "title": "WIA: Show Workspace Status",
+        "category": "WIA"
+      },
+      {
+        "command": "wia.doctor",
+        "title": "WIA: Run Environment Diagnostics (Doctor)",
+        "category": "WIA"
+      },
+      {
         "command": "wia.fixEnvironment",
         "title": "WIA: Repair Environment & Dependencies",
+        "category": "WIA"
+      },
+      {
+        "command": "wia.summary",
+        "title": "WIA: Generate Codebase Intelligence Summary",
+        "category": "WIA"
+      },
+      {
+        "command": "wia.files",
+        "title": "WIA: List Indexed Files",
+        "category": "WIA"
+      },
+      {
+        "command": "wia.info",
+        "title": "WIA: Tech Stack & Language Info",
+        "category": "WIA"
+      },
+      {
+        "command": "wia.search",
+        "title": "WIA: Search Symbols & Files",
+        "category": "WIA"
+      },
+      {
+        "command": "wia.explainSymbol",
+        "title": "WIA: Explain File or Symbol",
+        "category": "WIA"
+      },
+      {
+        "command": "wia.impact",
+        "title": "WIA: Analyze Change Impact",
+        "category": "WIA"
+      },
+      {
+        "command": "wia.showImpactPanel",
+        "title": "WIA: Open Change Impact Inspector",
+        "category": "WIA"
+      },
+      {
+        "command": "wia.analyzeImpactForSymbol",
+        "title": "WIA: Analyze Impact for Symbol",
+        "category": "WIA"
+      },
+      {
+        "command": "wia.flow",
+        "title": "WIA: Trace Call Flow",
+        "category": "WIA"
+      },
+      {
+        "command": "wia.traceFlowForSymbol",
+        "title": "WIA: Trace Flow for Symbol",
+        "category": "WIA"
+      },
+      {
+        "command": "wia.diff",
+        "title": "WIA: Git Diff & Symbol Impact",
+        "category": "WIA"
+      },
+      {
+        "command": "wia.gitHotspots",
+        "title": "WIA: Git Commit Churn Hotspots",
+        "category": "WIA"
+      },
+      {
+        "command": "wia.securityScan",
+        "title": "WIA: Scan Workspace for Secrets & Security",
+        "category": "WIA"
+      },
+      {
+        "command": "wia.generateReport",
+        "title": "WIA: Generate HTML Intelligence Report",
         "category": "WIA"
       },
       {
@@ -89,18 +194,13 @@
         "category": "WIA"
       },
       {
-        "command": "wia.explainArchitecture",
-        "title": "WIA: Explain Code Architecture",
+        "command": "wia.buildProject",
+        "title": "WIA: Build / Compile Project",
         "category": "WIA"
       },
       {
-        "command": "wia.showArchitecturePanel",
-        "title": "WIA: Open Visual Architecture Map",
-        "category": "WIA"
-      },
-      {
-        "command": "wia.showImpactPanel",
-        "title": "WIA: Open Change Impact Inspector",
+        "command": "wia.config",
+        "title": "WIA: Configure AI Provider & Settings",
         "category": "WIA"
       },
       {
@@ -108,6 +208,11 @@
         "title": "WIA: Refresh Knowledge Views",
         "category": "WIA",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "wia.startDaemon",
+        "title": "WIA: Start WIA Engine Daemon",
+        "category": "WIA"
       }
     ],
     "menus": {
@@ -140,7 +245,7 @@
         "wia.provider": {
           "type": "string",
           "default": "nvidia",
-          "enum": ["nvidia", "openai", "anthropic", "gemini", "local"],
+          "enum": ["openrouter", "nvidia", "openai", "anthropic", "gemini", "local"],
           "description": "AI reasoning provider used for WIA explanations"
         },
         "wia.model": {
@@ -164,7 +269,8 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "package": "vsce package --no-dependencies"
+    "test": "node ./out/test/runAllTests.js",
+    "package": "npx @vscode/vsce package --no-dependencies"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

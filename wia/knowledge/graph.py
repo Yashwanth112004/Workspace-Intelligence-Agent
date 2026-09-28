@@ -238,10 +238,38 @@ class WorkspaceGraph:
 
                 # Check if import matches a workspace module/file
                 target_file_id = None
-                for mod_key, f_id in module_path_map.items():
-                    if imp_dot == mod_key or imp_dot.startswith(mod_key + ".") or mod_key.endswith("." + imp_dot):
-                        target_file_id = f_id
-                        break
+
+                # Handle relative imports (e.g. ./decision/layaEngine or ../apiClient)
+                if imp_clean.startswith("./") or imp_clean.startswith("../"):
+                    src_dir = Path(rel_path).parent
+                    norm_cand = str(src_dir / imp_clean).replace("\\", "/")
+                    norm_cand = norm_cand.replace("/./", "/")
+                    # Collapse .. segments
+                    parts = []
+                    for part in norm_cand.split("/"):
+                        if part == "..":
+                            if parts:
+                                parts.pop()
+                        elif part and part != ".":
+                            parts.append(part)
+                    resolved_cand = "/".join(parts)
+
+                    for ext in ("", ".ts", ".tsx", ".js", ".jsx", ".py"):
+                        test_cand = resolved_cand + ext
+                        if test_cand in module_path_map:
+                            target_file_id = module_path_map[test_cand]
+                            break
+
+                    if not target_file_id:
+                        stem_cand = Path(resolved_cand).name
+                        if stem_cand in module_path_map:
+                            target_file_id = module_path_map[stem_cand]
+
+                if not target_file_id:
+                    for mod_key, f_id in module_path_map.items():
+                        if imp_dot == mod_key or imp_dot.startswith(mod_key + ".") or mod_key.endswith("." + imp_dot):
+                            target_file_id = f_id
+                            break
 
                 if target_file_id and target_file_id != file_id:
                     self.add_edge(file_id, target_file_id, relation_type="IMPORTS")
