@@ -236,7 +236,7 @@ class ReportGenerator:
 
         # Build File Intelligence Cards HTML Grouped by Language with Anchors
         language_nav_items_html = ""
-        language_filter_pills_html = f'<button class="filter-pill active" onclick="filterLanguage(\'all\', this)">All Files ({len(files_data)})</button>'
+        language_select_options_html = f'<option value="all">🌐 All Languages ({len(files_data)} files)</option>\n'
         grouped_files_html = ""
 
         for lang_name, lang_files in sorted_lang_groups:
@@ -245,19 +245,19 @@ class ReportGenerator:
             lang_name_esc = html.escape(lang_name)
             count = len(lang_files)
 
+            # Language Icon
+            icon = "🐍" if lang_name == "Python" else "📘" if lang_name == "TypeScript" else "📜" if lang_name == "JavaScript" else "⚙️" if lang_name in ("TOML", "JSON", "YAML") else "📄"
+
             language_nav_items_html += f"""
             <li class="nav-sub-item">
-                <a href="#{lang_id}">
-                    <span class="sub-bullet">•</span> {lang_name_esc} <span class="badge badge-outline" style="font-size:0.7rem; padding:0.1rem 0.4rem;">{count}</span>
+                <a href="#{lang_id}" onclick="onLanguageSelect('{lang_slug}')">
+                    <span><span class="sub-bullet">•</span> {icon} {lang_name_esc}</span>
+                    <span class="badge badge-outline" style="font-size:0.7rem; padding:0.1rem 0.4rem;">{count}</span>
                 </a>
             </li>
             """
 
-            language_filter_pills_html += f"""
-            <button class="filter-pill" onclick="filterLanguage('{lang_slug}', this)">
-                {lang_name_esc} ({count})
-            </button>
-            """
+            language_select_options_html += f'                    <option value="{lang_slug}">{icon} {lang_name_esc} ({count} files)</option>\n'
 
             group_cards_html = ""
             for fd in lang_files:
@@ -697,27 +697,42 @@ class ReportGenerator:
         }}
 
         /* Filter Pills */
-        .filter-pills-container {{
+        /* Filter Toolbar & Language Dropdown */
+        .filter-toolbar {{
             display: flex;
+            gap: 1rem;
+            align-items: center;
+            margin-bottom: 1.25rem;
             flex-wrap: wrap;
-            gap: 0.5rem;
-            margin-bottom: 1rem;
         }}
-        .filter-pill {{
-            background: var(--sidebar-bg);
+        .search-input-wrapper {{
+            flex: 1;
+            min-width: 280px;
+        }}
+        .lang-dropdown-wrapper {{
+            min-width: 240px;
+        }}
+        .lang-select {{
+            width: 100%;
+            padding: 0.7rem 1rem;
+            border-radius: 0.5rem;
             border: 1px solid var(--border-color);
-            color: var(--muted-color);
-            padding: 0.4rem 0.85rem;
-            border-radius: 2rem;
-            font-size: 0.82rem;
+            background-color: var(--sidebar-bg);
+            color: var(--text-color);
+            font-size: 0.9rem;
+            font-weight: 500;
             cursor: pointer;
+            outline: none;
             transition: all 0.2s ease;
         }}
-        .filter-pill:hover, .filter-pill.active {{
-            background: var(--accent-color);
-            color: #0b0f19;
-            font-weight: 600;
+        .lang-select:focus {{
             border-color: var(--accent-color);
+            box-shadow: 0 0 0 2px var(--accent-glow);
+        }}
+        .lang-select option {{
+            background-color: var(--sidebar-bg);
+            color: var(--text-color);
+            padding: 0.5rem;
         }}
 
         /* Tables */
@@ -742,7 +757,6 @@ class ReportGenerator:
         .progress-bar-fill {{ height: 100%; background-color: var(--accent-color); transition: width 0.3s ease; }}
 
         /* Search Box */
-        .search-container {{ margin-bottom: 1rem; }}
         .search-input {{ width: 100%; padding: 0.7rem 1rem; border-radius: 0.5rem; border: 1px solid var(--border-color); background-color: var(--sidebar-bg); color: var(--text-color); font-size: 0.9rem; }}
         .search-input:focus {{ outline: 2px solid var(--accent-color); }}
 
@@ -827,43 +841,49 @@ class ReportGenerator:
                     Follow these commands to install, index, query, and run intelligence workflows on this workspace:
                 </p>
 
-                <div class="cmd-desc">1. Install WIA CLI toolchain (Editable Mode or Pip):</div>
+                <div class="cmd-desc">1. Display WIA CLI help and available commands:</div>
+                <div class="cmd-box">
+                    <span class="cmd-text">wia --help</span>
+                    <button class="copy-btn" onclick="copyFromBox(this)">Copy</button>
+                </div>
+
+                <div class="cmd-desc">2. Install WIA CLI toolchain (Editable Mode or Pip):</div>
                 <div class="cmd-box">
                     <span class="cmd-text">pip install -e .</span>
                     <button class="copy-btn" onclick="copyFromBox(this)">Copy</button>
                 </div>
 
-                <div class="cmd-desc">2. Initialize and perform full workspace indexation:</div>
+                <div class="cmd-desc">3. Initialize and perform full workspace indexation:</div>
                 <div class="cmd-box">
                     <span class="cmd-text">wia init && wia index</span>
                     <button class="copy-btn" onclick="copyFromBox(this)">Copy</button>
                 </div>
 
-                <div class="cmd-desc">3. Check workspace indexing status, batch health, and cache statistics:</div>
+                <div class="cmd-desc">4. Check workspace indexing status, batch health, and cache statistics:</div>
                 <div class="cmd-box">
                     <span class="cmd-text">wia status</span>
                     <button class="copy-btn" onclick="copyFromBox(this)">Copy</button>
                 </div>
 
-                <div class="cmd-desc">4. Query codebase intelligence and retrieve grounded evidence:</div>
+                <div class="cmd-desc">5. Query codebase intelligence and retrieve grounded evidence:</div>
                 <div class="cmd-box">
                     <span class="cmd-text">wia ask "Explain the system architecture, entrypoints, and data flow"</span>
                     <button class="copy-btn" onclick="copyFromBox(this)">Copy</button>
                 </div>
 
-                <div class="cmd-desc">5. Perform Blast-Radius / Impact Analysis before modifying a file:</div>
+                <div class="cmd-desc">6. Perform Blast-Radius / Impact Analysis before modifying a file:</div>
                 <div class="cmd-box">
                     <span class="cmd-text">wia impact wia/core/retrieval.py</span>
                     <button class="copy-btn" onclick="copyFromBox(this)">Copy</button>
                 </div>
 
-                <div class="cmd-desc">6. Regenerate standalone interactive HTML report:</div>
+                <div class="cmd-desc">7. Regenerate standalone interactive HTML report:</div>
                 <div class="cmd-box">
                     <span class="cmd-text">wia report --output wia-report.html</span>
                     <button class="copy-btn" onclick="copyFromBox(this)">Copy</button>
                 </div>
 
-                <div class="cmd-desc">7. Launch backend FastAPI server / REST intelligence API:</div>
+                <div class="cmd-desc">8. Launch backend FastAPI server / REST intelligence API:</div>
                 <div class="cmd-box">
                     <span class="cmd-text">uvicorn backend.app.main:app --reload --port 8000</span>
                     <button class="copy-btn" onclick="copyFromBox(this)">Copy</button>
@@ -907,13 +927,15 @@ class ReportGenerator:
         <section id="file-narratives">
             <h2 class="section-heading"><a href="#file-narratives" class="anchor-link">#</a> File-by-File Codebase Intelligence ({len(files_data)} Files)</h2>
             
-            <div class="search-container">
-                <input type="text" id="fileSearch" class="search-input" placeholder="Search repository files, symbols, modules, architectural roles..." onkeyup="filterFiles()">
-            </div>
-
-            <!-- Language Quick Filter Tabs -->
-            <div class="filter-pills-container">
-                {language_filter_pills_html}
+            <div class="filter-toolbar">
+                <div class="search-input-wrapper">
+                    <input type="text" id="fileSearch" class="search-input" placeholder="Search repository files, symbols, modules, architectural roles..." onkeyup="filterFiles()">
+                </div>
+                <div class="lang-dropdown-wrapper">
+                    <select id="languageSelect" class="lang-select" onchange="onLanguageSelect(this.value)">
+                        {language_select_options_html}
+                    </select>
+                </div>
             </div>
 
             <div id="fileList">
@@ -960,10 +982,11 @@ class ReportGenerator:
             }});
         }}
 
-        function filterLanguage(langSlug, btn) {{
-            // Update active pill
-            document.querySelectorAll('.filter-pill').forEach(p => p.classList.remove('active'));
-            if (btn) btn.classList.add('active');
+        function onLanguageSelect(langSlug) {{
+            const selectEl = document.getElementById('languageSelect');
+            if (selectEl && selectEl.value !== langSlug) {{
+                selectEl.value = langSlug;
+            }}
 
             const sections = document.querySelectorAll('.language-section');
             if (langSlug === 'all') {{
@@ -977,6 +1000,7 @@ class ReportGenerator:
                     }}
                 }});
             }}
+            filterFiles();
         }}
 
         function toggleLanguageDetails(langSectionId) {{
@@ -990,22 +1014,33 @@ class ReportGenerator:
 
         function filterFiles() {{
             const input = document.getElementById('fileSearch').value.toLowerCase();
+            const currentLang = document.getElementById('languageSelect') ? document.getElementById('languageSelect').value : 'all';
+
             const cards = document.querySelectorAll('.file-card');
             cards.forEach(card => {{
                 const path = card.getAttribute('data-filepath') || '';
+                const cardLang = card.getAttribute('data-language') || '';
                 const text = card.innerText.toLowerCase();
-                if (path.includes(input) || text.includes(input)) {{
+
+                const matchesLang = (currentLang === 'all' || cardLang === currentLang);
+                const matchesSearch = (!input || path.includes(input) || text.includes(input));
+
+                if (matchesLang && matchesSearch) {{
                     card.style.display = 'block';
                 }} else {{
                     card.style.display = 'none';
                 }}
             }});
 
-            // Hide empty language sections when searching
+            // Hide empty language sections when searching or filtering
             document.querySelectorAll('.language-section').forEach(sec => {{
-                const visibleCards = sec.querySelectorAll('.file-card[style*="display: block"], .file-card:not([style*="display: none"])');
-                const hasVisible = Array.from(sec.querySelectorAll('.file-card')).some(c => c.style.display !== 'none');
-                sec.style.display = hasVisible ? 'block' : 'none';
+                const secLang = sec.getAttribute('data-language-group') || '';
+                if (currentLang !== 'all' && secLang !== currentLang) {{
+                    sec.style.display = 'none';
+                }} else {{
+                    const hasVisible = Array.from(sec.querySelectorAll('.file-card')).some(c => c.style.display !== 'none');
+                    sec.style.display = hasVisible ? 'block' : 'none';
+                }}
             }});
         }}
 
