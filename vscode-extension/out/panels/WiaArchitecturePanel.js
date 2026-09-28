@@ -130,11 +130,13 @@ class WiaArchitecturePanel {
         }
     }
     _getInitialHtml() {
+        const nonce = this.getNonce();
+        const cspSource = this._panel.webview.cspSource;
         return `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta http-equiv="Content-Security-Policy" content="default-src * 'unsafe-inline' 'unsafe-eval' data: blob:; script-src * 'unsafe-inline' 'unsafe-eval' vscode-resource:; style-src * 'unsafe-inline'; font-src * data:; img-src * data: blob: vscode-resource:;">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${cspSource} 'unsafe-inline'; font-src ${cspSource} data:; img-src ${cspSource} https: data: blob:; script-src 'nonce-${nonce}' ${cspSource};">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>WIA Architecture Visualizer</title>
     <style>
@@ -247,7 +249,7 @@ class WiaArchitecturePanel {
 <body>
     <div class="header">
         <h2>🏛️ Architecture & Subsystem Visualizer</h2>
-        <button class="btn-refresh" onclick="refresh()">↻ Refresh</button>
+        <button class="btn-refresh" type="button">↻ Refresh</button>
     </div>
 
     <div id="contentArea">
@@ -257,107 +259,135 @@ class WiaArchitecturePanel {
         </div>
     </div>
 
-    <script>
-        const vscode = acquireVsCodeApi();
+    <script nonce="${nonce}">
+        (function() {
+            var vscode;
+            try {
+                vscode = acquireVsCodeApi();
+            } catch (e) {
+                vscode = window.vscode || (typeof acquireVsCodeApi !== 'undefined' ? acquireVsCodeApi() : null);
+            }
+            window.vscode = vscode;
 
-        function refresh() {
-            vscode.postMessage({ command: 'refresh' });
-        }
-
-        function openFile(filePath) {
-            vscode.postMessage({ command: 'openFile', filePath: filePath });
-        }
-
-        // Global event delegation
-        document.addEventListener('click', function(e) {
-            const target = e.target;
-            if (!target) return;
-
-            if (target.classList.contains('btn-refresh') || target.closest('.btn-refresh')) {
-                e.preventDefault();
-                refresh();
-                return;
+            function postToExtension(msg) {
+                try {
+                    if (vscode && vscode.postMessage) {
+                        vscode.postMessage(msg);
+                    }
+                } catch (err) {
+                    console.error('postToExtension error:', err);
+                }
             }
 
-            const fileElem = target.closest('[data-filepath]');
-            if (fileElem) {
-                e.preventDefault();
-                const fp = fileElem.getAttribute('data-filepath');
-                if (fp) openFile(fp);
-                return;
+            function refresh() {
+                postToExtension({ command: 'refresh' });
             }
-        });
 
-        window.addEventListener('message', event => {
-            const msg = event.data;
-            const area = document.getElementById('contentArea');
+            function openFile(filePath) {
+                postToExtension({ command: 'openFile', filePath: filePath });
+            }
 
-            if (msg.command === 'setLoading') {
-                area.innerHTML = '<div class="empty-state"><div class="spinner"></div><p style="margin-top:12px;">Loading architecture graph...</p></div>';
-            } else if (msg.command === 'showError') {
-                area.innerHTML = '<div style="background:rgba(248,81,73,0.1); border-left:3px solid #f85149; padding:14px; border-radius:4px;">' + msg.message + '</div>';
-            } else if (msg.command === 'renderArchitecture') {
-                const arch = msg.arch || {};
-                const status = msg.status || {};
-                let html = '';
+            // Global event delegation
+            document.addEventListener('click', function(e) {
+                var target = e.target;
+                if (!target) return;
 
-                // Stats overview
-                html += '<div class="stat-grid">';
-                html += '  <div class="stat-card"><div class="stat-val">' + (status.total_files || arch.total_nodes || 0) + '</div><div class="stat-label">Total Files</div></div>';
-                html += '  <div class="stat-card"><div class="stat-val">' + (status.total_loc || 0) + '</div><div class="stat-label">Lines of Code</div></div>';
-                html += '  <div class="stat-card"><div class="stat-val">' + (arch.total_nodes || 0) + '</div><div class="stat-label">Graph Nodes</div></div>';
-                html += '  <div class="stat-card"><div class="stat-val">' + (arch.total_edges || 0) + '</div><div class="stat-label">Relation Edges</div></div>';
-                html += '</div>';
-
-                // Circular dependency warnings
-                if (arch.circular_dependencies && arch.circular_dependencies.length > 0) {
-                    html += '<div class="cycle-warning">';
-                    html += '  <h4>⚠️ Circular Dependency Cycles Detected (' + arch.circular_dependencies.length + ')</h4>';
-                    html += '  <p style="font-size:12px; margin:0 0 6px 0;">The following files have recursive import cycles detected via DFS cycle detection:</p>';
-                    arch.circular_dependencies.forEach(c => {
-                        html += '<div class="cycle-chain">🔁 ' + c + '</div>';
-                    });
-                    html += '</div>';
+                if (target.classList.contains('btn-refresh') || target.closest('.btn-refresh')) {
+                    e.preventDefault();
+                    refresh();
+                    return;
                 }
 
-                // Subsystems
-                if (arch.subsystems && arch.subsystems.length > 0) {
-                    html += '<div class="section-title">🧱 Subsystem Architecture Boundaries (' + arch.subsystems.length + ')</div>';
-                    html += '<div class="subsystem-grid">';
-                    arch.subsystems.forEach(s => {
-                        html += '<div class="subsystem-card">';
-                        html += '  <div class="subsystem-name">' + s.name + '</div>';
-                        html += '  <div class="subsystem-role">' + s.role + '</div>';
-                        html += '  <div class="subsystem-meta">';
-                        html += '    <span>📁 ' + s.file_count + ' files</span>';
-                        html += '    <span>⚡ ' + s.symbol_count + ' symbols</span>';
-                        html += '  </div>';
+                var fileElem = target.closest('[data-filepath]');
+                if (fileElem) {
+                    e.preventDefault();
+                    var fp = fileElem.getAttribute('data-filepath');
+                    if (fp) openFile(fp);
+                    return;
+                }
+            });
+
+            window.addEventListener('message', function(event) {
+                var msg = event.data;
+                if (!msg) return;
+                var area = document.getElementById('contentArea');
+                if (!area) return;
+
+                if (msg.command === 'setLoading') {
+                    area.innerHTML = '<div class="empty-state"><div class="spinner"></div><p style="margin-top:12px;">Loading architecture graph...</p></div>';
+                } else if (msg.command === 'showError') {
+                    area.innerHTML = '<div style="background:rgba(248,81,73,0.1); border-left:3px solid #f85149; padding:14px; border-radius:4px;">' + msg.message + '</div>';
+                } else if (msg.command === 'renderArchitecture') {
+                    var arch = msg.arch || {};
+                    var status = msg.status || {};
+                    var html = '';
+
+                    // Stats overview
+                    html += '<div class="stat-grid">';
+                    html += '  <div class="stat-card"><div class="stat-val">' + (status.total_files || arch.total_nodes || 0) + '</div><div class="stat-label">Total Files</div></div>';
+                    html += '  <div class="stat-card"><div class="stat-val">' + (status.total_loc || 0) + '</div><div class="stat-label">Lines of Code</div></div>';
+                    html += '  <div class="stat-card"><div class="stat-val">' + (arch.total_nodes || 0) + '</div><div class="stat-label">Graph Nodes</div></div>';
+                    html += '  <div class="stat-card"><div class="stat-val">' + (arch.total_edges || 0) + '</div><div class="stat-label">Relation Edges</div></div>';
+                    html += '</div>';
+
+                    // Circular dependency warnings
+                    if (arch.circular_dependencies && arch.circular_dependencies.length > 0) {
+                        html += '<div class="cycle-warning">';
+                        html += '  <h4>⚠️ Circular Dependency Cycles Detected (' + arch.circular_dependencies.length + ')</h4>';
+                        html += '  <p style="font-size:12px; margin:0 0 6px 0;">The following files have recursive import cycles detected via DFS cycle detection:</p>';
+                        arch.circular_dependencies.forEach(function(c) {
+                            html += '<div class="cycle-chain">🔁 ' + c + '</div>';
+                        });
                         html += '</div>';
-                    });
+                    }
+
+                    // Subsystems
+                    if (arch.subsystems && arch.subsystems.length > 0) {
+                        html += '<div class="section-title">🧱 Subsystem Architecture Boundaries (' + arch.subsystems.length + ')</div>';
+                        html += '<div class="subsystem-grid">';
+                        arch.subsystems.forEach(function(s) {
+                            html += '<div class="subsystem-card">';
+                            html += '  <div class="subsystem-name">' + s.name + '</div>';
+                            html += '  <div class="subsystem-role">' + s.role + '</div>';
+                            html += '  <div class="subsystem-meta">';
+                            html += '    <span>📁 ' + s.file_count + ' files</span>';
+                            html += '    <span>⚡ ' + s.symbol_count + ' symbols</span>';
+                            html += '  </div>';
+                            html += '</div>';
+                        });
+                        html += '</div>';
+                    }
+
+                    // Entry Points & Frameworks
+                    html += '<div class="section-title">🚀 Entry Points & Discovered Tech Stack</div>';
+                    html += '<div style="margin-bottom:20px;">';
+                    if (status.entry_points && status.entry_points.length > 0) {
+                        status.entry_points.forEach(function(ep) {
+                            html += '<span class="tag" data-filepath="' + ep + '" style="background:rgba(63,185,80,0.15); color:#3fb950; cursor:pointer;">🎯 ' + ep + '</span>';
+                        });
+                    }
+                    if (status.tech_stack) {
+                        Object.entries(status.tech_stack).forEach(function(entry) {
+                            html += '<span class="tag">💻 ' + entry[0] + ': ' + entry[1] + ' LOC</span>';
+                        });
+                    }
                     html += '</div>';
-                }
 
-                // Entry Points & Frameworks
-                html += '<div class="section-title">🚀 Entry Points & Discovered Tech Stack</div>';
-                html += '<div style="margin-bottom:20px;">';
-                if (status.entry_points && status.entry_points.length > 0) {
-                    status.entry_points.forEach(ep => {
-                        html += '<span class="tag" style="background:rgba(63,185,80,0.15); color:#3fb950; cursor:pointer;" onclick="openFile(\'' + ep + '\')">🎯 ' + ep + '</span>';
-                    });
+                    area.innerHTML = html;
                 }
-                if (status.tech_stack) {
-                    Object.entries(status.tech_stack).forEach(([lang, loc]) => {
-                        html += '<span class="tag">💻 ' + lang + ': ' + loc + ' LOC</span>';
-                    });
-                }
-                html += '</div>';
-
-                area.innerHTML = html;
-            }
-        });
+            });
+        })();
     </script>
 </body>
 </html>`;
+    }
+    getNonce() {
+        let text = '';
+        const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+        for (let i = 0; i < 32; i++) {
+            text += possible.charAt(Math.floor(Math.random() * possible.length));
+        }
+        return text;
     }
 }
 exports.WiaArchitecturePanel = WiaArchitecturePanel;

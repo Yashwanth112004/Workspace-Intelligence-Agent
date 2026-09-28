@@ -155,11 +155,13 @@ class WiaImpactPanel {
         }
     }
     _getInitialHtml() {
+        const nonce = this.getNonce();
+        const cspSource = this._panel.webview.cspSource;
         return `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta http-equiv="Content-Security-Policy" content="default-src * 'unsafe-inline' 'unsafe-eval' data: blob:; script-src * 'unsafe-inline' 'unsafe-eval' vscode-resource:; style-src * 'unsafe-inline'; font-src * data:; img-src * data: blob: vscode-resource:;">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${cspSource} 'unsafe-inline'; font-src ${cspSource} data:; img-src ${cspSource} https: data: blob:; script-src 'nonce-${nonce}' ${cspSource};">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>WIA Change Impact Inspector</title>
     <style>
@@ -346,8 +348,8 @@ class WiaImpactPanel {
     </div>
 
     <div class="search-bar">
-        <input type="text" id="targetInput" placeholder="Enter symbol name (e.g. hash_file, cli_entrypoint) or file path..." onkeydown="if(event.key==='Enter') searchTarget()" />
-        <button class="btn-primary" onclick="searchTarget()">Analyze Impact</button>
+        <input type="text" id="targetInput" placeholder="Enter symbol name (e.g. hash_file, cli_entrypoint) or file path..." />
+        <button class="btn-primary" id="btnAnalyze" type="button">Analyze Impact</button>
     </div>
 
     <div id="contentArea">
@@ -356,120 +358,160 @@ class WiaImpactPanel {
         </div>
     </div>
 
-    <script>
-        const vscode = acquireVsCodeApi();
+    <script nonce="${nonce}">
+        (function() {
+            var vscode;
+            try {
+                vscode = acquireVsCodeApi();
+            } catch (e) {
+                vscode = window.vscode || (typeof acquireVsCodeApi !== 'undefined' ? acquireVsCodeApi() : null);
+            }
+            window.vscode = vscode;
 
-        function searchTarget() {
-            const input = document.getElementById('targetInput');
-            const target = input.value.trim();
-            if (!target) return;
-            vscode.postMessage({ command: 'inspectTarget', target: target });
-        }
-
-        function openFile(filePath, line) {
-            vscode.postMessage({ command: 'openFile', filePath: filePath, line: line });
-        }
-
-        function traceFlow(symbol) {
-            vscode.postMessage({ command: 'traceFlow', symbol: symbol });
-        }
-
-        // Global event delegation
-        document.addEventListener('click', function(e) {
-            const target = e.target;
-            if (!target) return;
-
-            if (target.classList.contains('btn-primary') || target.closest('.btn-primary')) {
-                e.preventDefault();
-                searchTarget();
-                return;
+            function postToExtension(msg) {
+                try {
+                    if (vscode && vscode.postMessage) {
+                        vscode.postMessage(msg);
+                    }
+                } catch (err) {
+                    console.error('postToExtension error:', err);
+                }
             }
 
-            const openBtn = target.closest('[data-openfile]');
-            if (openBtn) {
-                e.preventDefault();
-                const fp = openBtn.getAttribute('data-openfile');
-                const ln = parseInt(openBtn.getAttribute('data-line') || '1', 10);
-                if (fp) openFile(fp, ln);
-                return;
+            function searchTarget() {
+                var input = document.getElementById('targetInput');
+                if (!input) return;
+                var target = (input.value || '').trim();
+                if (!target) return;
+                postToExtension({ command: 'inspectTarget', target: target });
             }
 
-            const traceBtn = target.closest('[data-tracesymbol]');
-            if (traceBtn) {
-                e.preventDefault();
-                const sym = traceBtn.getAttribute('data-tracesymbol');
-                if (sym) traceFlow(sym);
-                return;
+            function openFile(filePath, line) {
+                postToExtension({ command: 'openFile', filePath: filePath, line: line });
             }
-        });
 
-        window.addEventListener('message', event => {
-            const msg = event.data;
-            const area = document.getElementById('contentArea');
+            function traceFlow(symbol) {
+                postToExtension({ command: 'traceFlow', symbol: symbol });
+            }
 
-            if (msg.command === 'setLoading') {
-                area.innerHTML = '<div class="empty-state"><div class="spinner"></div><p style="margin-top:10px;">Analyzing change impact for <b>' + msg.target + '</b> across Knowledge Graph...</p></div>';
-            } else if (msg.command === 'showError') {
-                area.innerHTML = '<div class="explanation-box" style="border-left-color:#f85149; background:rgba(248,81,73,0.1);">' + msg.message + '</div>';
-            } else if (msg.command === 'renderImpact') {
-                const data = msg.data;
-                const risk = data.risk_level || 'LOW';
+            // Global event delegation
+            document.addEventListener('click', function(e) {
+                var target = e.target;
+                if (!target) return;
 
-                let html = '';
-                html += '<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:16px;">';
-                html += '  <h3 style="margin:0; font-size:16px;">Target: <code>' + msg.target + '</code></h3>';
-                html += '  <span class="risk-badge risk-' + risk + '">' + risk + ' RISK</span>';
-                html += '</div>';
-
-                if (data.explanation) {
-                    html += '<div class="explanation-box">' + data.explanation + '</div>';
+                if (target.id === 'btnAnalyze' || target.classList.contains('btn-primary') || target.closest('#btnAnalyze, .btn-primary')) {
+                    e.preventDefault();
+                    searchTarget();
+                    return;
                 }
 
-                html += '<div class="stat-grid">';
-                html += '  <div class="stat-card"><div class="stat-val">' + (data.direct_impact_count || 0) + '</div><div class="stat-label">Direct Callers</div></div>';
-                html += '  <div class="stat-card"><div class="stat-val">' + (data.affected_files_count || 0) + '</div><div class="stat-label">Affected Files</div></div>';
-                html += '  <div class="stat-card"><div class="stat-val">' + risk + '</div><div class="stat-label">Risk Rating</div></div>';
-                html += '</div>';
+                var openBtn = target.closest('[data-openfile]');
+                if (openBtn) {
+                    e.preventDefault();
+                    var fp = openBtn.getAttribute('data-openfile');
+                    var ln = parseInt(openBtn.getAttribute('data-line') || '1', 10);
+                    if (fp) openFile(fp, ln);
+                    return;
+                }
 
-                // Direct Callers
-if (data.direct_dependents && data.direct_dependents.length > 0) {                      html += '<div class="section-title">🔗 Direct Callers & Dependents (' + data.direct_dependents.length + ')</div>';
-                    html += '<div class="item-list">';
-                    data.direct_dependents.forEach(item => {
-                        html += '<div class="item-card">';
-                        html += '  <div class="item-info">';
-                        html += '    <span class="item-name">' + (item.name || item.symbol_name || 'Dependent') + ' (' + (item.symbol_type || 'caller') + ')</span>';
-                        html += '    <span class="item-path">' + item.file_path + (item.line ? ':' + item.line : '') + '</span>';
-                        html += '  </div>';
-                        html += '  <div class="item-action">';
-                        if (item.name) {
-                            html += '    <button class="btn-sm" onclick="traceFlow(\'' + item.name + '\')">Trace Flow</button>';
-                        }
-                        html += '    <button class="btn-sm" onclick="openFile(\'' + item.file_path + '\', ' + (item.line || 1) + ')">Open File</button>';
-                        html += '  </div>';
-                        html += '</div>';
-                    });
+                var traceBtn = target.closest('[data-tracesymbol]');
+                if (traceBtn) {
+                    e.preventDefault();
+                    var sym = traceBtn.getAttribute('data-tracesymbol');
+                    if (sym) traceFlow(sym);
+                    return;
+                }
+            });
+
+            var targetInput = document.getElementById('targetInput');
+            if (targetInput) {
+                targetInput.addEventListener('keydown', function(e) {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        searchTarget();
+                    }
+                });
+            }
+
+            window.addEventListener('message', function(event) {
+                var msg = event.data;
+                if (!msg) return;
+                var area = document.getElementById('contentArea');
+                if (!area) return;
+
+                if (msg.command === 'setLoading') {
+                    area.innerHTML = '<div class="empty-state"><div class="spinner"></div><p style="margin-top:10px;">Analyzing change impact for <b>' + msg.target + '</b> across Knowledge Graph...</p></div>';
+                } else if (msg.command === 'showError') {
+                    area.innerHTML = '<div class="explanation-box" style="border-left-color:#f85149; background:rgba(248,81,73,0.1);">' + msg.message + '</div>';
+                } else if (msg.command === 'renderImpact') {
+                    var data = msg.data;
+                    var risk = data.risk_level || 'LOW';
+
+                    var html = '';
+                    html += '<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:16px;">';
+                    html += '  <h3 style="margin:0; font-size:16px;">Target: <code>' + msg.target + '</code></h3>';
+                    html += '  <span class="risk-badge risk-' + risk + '">' + risk + ' RISK</span>';
                     html += '</div>';
-                }
 
-                // Affected Files
-                if (data.affected_files && data.affected_files.length > 0) {
-                    html += '<div class="section-title">📁 Ripple Impacted Files (' + data.affected_files.length + ')</div>';
-                    html += '<div class="item-list">';
-                    data.affected_files.forEach(file => {
-                        html += '<div class="item-card">';
-                        html += '  <span class="item-path">' + file + '</span>';
-                        html += '  <button class="btn-sm" onclick="openFile(\'' + file + '\', 1)">Jump to Source</button>';
-                        html += '</div>';
-                    });
+                    if (data.explanation) {
+                        html += '<div class="explanation-box">' + data.explanation + '</div>';
+                    }
+
+                    html += '<div class="stat-grid">';
+                    html += '  <div class="stat-card"><div class="stat-val">' + (data.direct_impact_count || 0) + '</div><div class="stat-label">Direct Callers</div></div>';
+                    html += '  <div class="stat-card"><div class="stat-val">' + (data.affected_files_count || 0) + '</div><div class="stat-label">Affected Files</div></div>';
+                    html += '  <div class="stat-card"><div class="stat-val">' + risk + '</div><div class="stat-label">Risk Rating</div></div>';
                     html += '</div>';
-                }
 
-                area.innerHTML = html;
-            }
-        });
+                    // Direct Callers
+                    if (data.direct_impacts && data.direct_impacts.length > 0) {
+                        html += '<div class="section-title">🔗 Direct Callers & Dependents (' + data.direct_impacts.length + ')</div>';
+                        html += '<div class="item-list">';
+                        data.direct_impacts.forEach(function(item) {
+                            html += '<div class="item-card">';
+                            html += '  <div class="item-info">';
+                            html += '    <span class="item-name">' + (item.name || item.symbol_name || 'Dependent') + ' (' + (item.symbol_type || 'caller') + ')</span>';
+                            html += '    <span class="item-path">' + item.file_path + (item.line ? ':' + item.line : '') + '</span>';
+                            html += '  </div>';
+                            html += '  <div class="item-action">';
+                            if (item.name) {
+                                html += '    <button class="btn-sm" type="button" data-tracesymbol="' + item.name + '">Trace Flow</button>';
+                            }
+                            html += '    <button class="btn-sm" type="button" data-openfile="' + item.file_path + '" data-line="' + (item.line || 1) + '">Open File</button>';
+                            html += '  </div>';
+                            html += '</div>';
+                        });
+                        html += '</div>';
+                    }
+
+                    // Affected Files
+                    if (data.affected_files && data.affected_files.length > 0) {
+                        html += '<div class="section-title">📁 Ripple Impacted Files (' + data.affected_files.length + ')</div>';
+                        html += '<div class="item-list">';
+                        data.affected_files.forEach(function(file) {
+                            html += '<div class="item-card">';
+                            html += '  <span class="item-path">' + file + '</span>';
+                            html += '  <button class="btn-sm" type="button" data-openfile="' + file + '" data-line="1">Jump to Source</button>';
+                            html += '</div>';
+                        });
+                        html += '</div>';
+                    }
+
+                    area.innerHTML = html;
+                }
+            });
+        })();
     </script>
 </body>
 </html>`;
+    }
+    getNonce() {
+        let text = '';
+        const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+        for (let i = 0; i < 32; i++) {
+            text += possible.charAt(Math.floor(Math.random() * possible.length));
+        }
+        return text;
     }
 }
 exports.WiaImpactPanel = WiaImpactPanel;

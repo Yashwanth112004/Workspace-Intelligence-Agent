@@ -153,11 +153,13 @@ class WiaChatPanel {
         }
     }
     _getHtmlForWebview() {
+        const nonce = this.getNonce();
+        const cspSource = this._panel.webview.cspSource;
         return `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta http-equiv="Content-Security-Policy" content="default-src * 'unsafe-inline' 'unsafe-eval' data: blob:; script-src * 'unsafe-inline' 'unsafe-eval' vscode-resource:; style-src * 'unsafe-inline'; font-src * data:; img-src * data: blob: vscode-resource:;">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${cspSource} 'unsafe-inline'; font-src ${cspSource} data:; img-src ${cspSource} https: data: blob:; script-src 'nonce-${nonce}' ${cspSource};">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>WIA AI Assistant</title>
     <style>
@@ -351,10 +353,10 @@ class WiaChatPanel {
     </div>
 
     <div class="prompt-chips">
-        <span class="chip" onclick="sendPrompt('Explain the high-level architecture of this repository.')">🏛️ Architecture</span>
-        <span class="chip" onclick="sendPrompt('Generate a complete developer onboarding guide for this workspace.')">📖 Onboarding Guide</span>
-        <span class="chip" onclick="sendPrompt('Audit codebase health, complexity hotspots, and structural debt.')">🩺 Health Audit</span>
-        <span class="chip" onclick="sendPrompt('Which files have the highest incoming dependencies and risk?')">⚡ Impact Risks</span>
+        <span class="chip" data-prompt="Explain the high-level architecture of this repository.">🏛️ Architecture</span>
+        <span class="chip" data-prompt="Generate a complete developer onboarding guide for this workspace.">📖 Onboarding Guide</span>
+        <span class="chip" data-prompt="Audit codebase health, complexity hotspots, and structural debt.">🩺 Health Audit</span>
+        <span class="chip" data-prompt="Which files have the highest incoming dependencies and risk?">⚡ Impact Risks</span>
     </div>
 
     <div class="chat-box" id="chat">
@@ -370,171 +372,199 @@ class WiaChatPanel {
     </div>
 
     <div class="input-bar">
-        <textarea id="userInput" placeholder="Ask anything about architecture, symbols, flow... (Enter to send)" onkeydown="if(event.key==='Enter' && !event.shiftKey) { event.preventDefault(); sendMsg(); }"></textarea>
-        <button class="send-btn" onclick="sendMsg()">Ask</button>
+        <textarea id="userInput" placeholder="Ask anything about architecture, symbols, flow... (Enter to send)"></textarea>
+        <button class="send-btn" id="btnSendChat" type="button">Ask</button>
     </div>
 
-    <script>
-        var vscode;
-        try {
-            vscode = acquireVsCodeApi();
-        } catch (e) {
-            vscode = window.vscode || (typeof acquireVsCodeApi !== 'undefined' ? acquireVsCodeApi() : null);
-        }
-        window.vscode = vscode;
-
-        function postToExtension(msg) {
+    <script nonce="${nonce}">
+        (function() {
+            var vscode;
             try {
-                var api = window.vscode || (typeof vscode !== 'undefined' ? vscode : null);
-                if (api && api.postMessage) {
-                    api.postMessage(msg);
+                vscode = acquireVsCodeApi();
+            } catch (e) {
+                vscode = window.vscode || (typeof acquireVsCodeApi !== 'undefined' ? acquireVsCodeApi() : null);
+            }
+            window.vscode = vscode;
+
+            function postToExtension(msg) {
+                try {
+                    var api = window.vscode || (typeof vscode !== 'undefined' ? vscode : null);
+                    if (api && api.postMessage) {
+                        api.postMessage(msg);
+                    }
+                } catch (err) {
+                    console.error('postToExtension error:', err);
                 }
-            } catch (err) {
-                console.error('postToExtension error:', err);
-            }
-        }
-
-        function sendPrompt(text) {
-            document.getElementById('userInput').value = text;
-            sendMsg();
-        }
-
-        function sendMsg() {
-            const input = document.getElementById('userInput');
-            const text = input.value.trim();
-            if (!text) return;
-            appendMsg('user', text);
-            postToExtension({ command: 'askQuestion', text: text });
-            input.value = '';
-        }
-
-        function triggerScan() {
-            postToExtension({ command: 'scanWorkspace' });
-        }
-
-        function triggerDaemon() {
-            postToExtension({ command: 'startDaemon' });
-        }
-
-        function renderMarkdown(md) {
-            let html = md
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;');
-
-            // Code blocks
-            html = html.replace(new RegExp('\\x60\\x60\\x60([a-zA-Z0-9_-]*)\\n([\\s\\S]*?)\\x60\\x60\\x60', 'g'), '<pre><code>$2</code></pre>');
-            // Inline code
-            html = html.replace(new RegExp('\\x60([^\\x60]+)\\x60', 'g'), '<code>$1</code>');
-            // Bold
-            html = html.replace(/\\*\\*([^\\*]+)\\*\\*/g, '<b>$1</b>');
-            // Italics
-            html = html.replace(/\\*([^\\*]+)\\*/g, '<i>$1</i>');
-            // Headers
-            html = html.replace(/^### (.*$)/gim, '<h4 style="margin:8px 0 4px 0;">$1</h4>');
-            html = html.replace(/^## (.*$)/gim, '<h3 style="margin:10px 0 6px 0;">$1</h3>');
-            html = html.replace(/^# (.*$)/gim, '<h2 style="margin:12px 0 8px 0;">$1</h2>');
-            // Line breaks
-            html = html.replace(/\\n/g, '<br/>');
-            return html;
-        }
-
-        function appendMsg(sender, text, citations = [], intent = null, showScanBtn = false, showDaemonBtn = false) {
-            const chat = document.getElementById('chat');
-            const div = document.createElement('div');
-            div.className = 'msg ' + sender;
-
-            let content = '';
-            if (intent) {
-                content += '<span class="intent-badge">INTENT: ' + intent + '</span><br/>';
-            }
-            content += renderMarkdown(text);
-
-            if (showScanBtn) {
-                content += '<br/><button class="action-btn" type="button" onclick="triggerScan()">🚀 Scan Workspace Now</button>';
-            }
-            if (showDaemonBtn) {
-                content += '<br/><button class="action-btn" type="button" onclick="triggerDaemon()">⚡ Start WIA Daemon</button>';
             }
 
-            if (citations && citations.length > 0) {
-                content += '<div class="citations"><b>📑 Evidence Sources:</b><br/>';
-                citations.forEach(c => {
-                    const lineSuffix = c.start_line ? ':' + c.start_line : '';
-                    const escapedPath = (c.file_path || '').replace(/"/g, '&quot;');
-                    const lineNum = c.start_line || 1;
-                    content += '<button class="cite-btn" type="button" data-filepath="' + escapedPath + '" data-line="' + lineNum + '">📄 ' + escapedPath + lineSuffix + '</button>';
+            function sendPrompt(text) {
+                var input = document.getElementById('userInput');
+                if (input) {
+                    input.value = text;
+                    sendMsg();
+                }
+            }
+
+            function sendMsg() {
+                var input = document.getElementById('userInput');
+                if (!input) return;
+                var text = (input.value || '').trim();
+                if (!text) return;
+                appendMsg('user', text);
+                postToExtension({ command: 'askQuestion', text: text });
+                input.value = '';
+            }
+
+            function triggerScan() {
+                postToExtension({ command: 'scanWorkspace' });
+            }
+
+            function triggerDaemon() {
+                postToExtension({ command: 'startDaemon' });
+            }
+
+            function renderMarkdown(md) {
+                var html = String(md || '')
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;');
+
+                // Code blocks
+                html = html.replace(new RegExp('\\x60\\x60\\x60([a-zA-Z0-9_-]*)\\n([\\s\\S]*?)\\x60\\x60\\x60', 'g'), '<pre><code>$2</code></pre>');
+                // Inline code
+                html = html.replace(new RegExp('\\x60([^\\x60]+)\\x60', 'g'), '<code>$1</code>');
+                // Bold
+                html = html.replace(/\\*\\*([^\\*]+)\\*\\*/g, '<b>$1</b>');
+                // Italics
+                html = html.replace(/\\*([^\\*]+)\\*/g, '<i>$1</i>');
+                // Headers
+                html = html.replace(/^### (.*$)/gim, '<h4 style="margin:8px 0 4px 0;">$1</h4>');
+                html = html.replace(/^## (.*$)/gim, '<h3 style="margin:10px 0 6px 0;">$1</h3>');
+                html = html.replace(/^# (.*$)/gim, '<h2 style="margin:12px 0 8px 0;">$1</h2>');
+                // Line breaks
+                html = html.replace(/\\n/g, '<br/>');
+                return html;
+            }
+
+            function appendMsg(sender, text, citations, intent, showScanBtn, showDaemonBtn) {
+                citations = citations || [];
+                var chat = document.getElementById('chat');
+                if (!chat) return;
+                var div = document.createElement('div');
+                div.className = 'msg ' + sender;
+
+                var content = '';
+                if (intent) {
+                    content += '<span class="intent-badge">INTENT: ' + intent + '</span><br/>';
+                }
+                content += renderMarkdown(text);
+
+                if (showScanBtn) {
+                    content += '<br/><button class="action-btn" type="button" data-action="scan">🚀 Scan Workspace Now</button>';
+                }
+                if (showDaemonBtn) {
+                    content += '<br/><button class="action-btn" type="button" data-action="daemon">⚡ Start WIA Daemon</button>';
+                }
+
+                if (citations && citations.length > 0) {
+                    content += '<div class="citations"><b>📑 Evidence Sources:</b><br/>';
+                    citations.forEach(function(c) {
+                        var lineSuffix = c.start_line ? ':' + c.start_line : '';
+                        var escapedPath = (c.file_path || '').replace(/"/g, '&quot;');
+                        var lineNum = c.start_line || 1;
+                        content += '<button class="cite-btn" type="button" data-filepath="' + escapedPath + '" data-line="' + lineNum + '">📄 ' + escapedPath + lineSuffix + '</button>';
+                    });
+                    content += '</div>';
+                }
+
+                div.innerHTML = content;
+                chat.appendChild(div);
+                chat.scrollTop = chat.scrollHeight;
+            }
+
+            // Document-wide delegated event handler
+            document.addEventListener('click', function(e) {
+                var target = e.target;
+                if (!target) return;
+
+                // Ask / Send button
+                if (target.id === 'btnSendChat' || target.classList.contains('send-btn') || target.closest('#btnSendChat, .send-btn')) {
+                    e.preventDefault();
+                    sendMsg();
+                    return;
+                }
+
+                // Prompt chips
+                var chip = target.closest('.chip');
+                if (chip) {
+                    e.preventDefault();
+                    var text = chip.getAttribute('data-prompt') || chip.textContent.replace(/^[^\w]+/, '').trim();
+                    sendPrompt(text);
+                    return;
+                }
+
+                // Action buttons
+                var actionBtn = target.closest('.action-btn');
+                if (actionBtn) {
+                    e.preventDefault();
+                    var act = actionBtn.getAttribute('data-action');
+                    if (act === 'scan' || actionBtn.textContent.includes('Scan Workspace')) {
+                        triggerScan();
+                    } else if (act === 'daemon' || actionBtn.textContent.includes('Start WIA Daemon')) {
+                        triggerDaemon();
+                    }
+                    return;
+                }
+
+                // Citation buttons
+                var citeBtn = target.closest('.cite-btn');
+                if (citeBtn) {
+                    e.preventDefault();
+                    var fp = citeBtn.getAttribute('data-filepath');
+                    var line = parseInt(citeBtn.getAttribute('data-line') || '1', 10);
+                    if (fp) {
+                        postToExtension({ command: 'openCitation', filePath: fp, line: line });
+                    }
+                    return;
+                }
+            });
+
+            var userInput = document.getElementById('userInput');
+            if (userInput) {
+                userInput.addEventListener('keydown', function(e) {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        sendMsg();
+                    }
                 });
-                content += '</div>';
             }
 
-            div.innerHTML = content;
-            chat.appendChild(div);
-            chat.scrollTop = chat.scrollHeight;
-        }
-
-        // Document-wide delegated event handler
-        document.addEventListener('click', function(e) {
-            const target = e.target;
-            if (!target) return;
-
-            // Ask / Send button
-            if (target.classList.contains('send-btn') || target.closest('.send-btn')) {
-                e.preventDefault();
-                sendMsg();
-                return;
-            }
-
-            // Prompt chips
-            const chip = target.closest('.chip');
-            if (chip) {
-                e.preventDefault();
-                const text = chip.getAttribute('data-prompt') || chip.textContent.replace(/^[^\w]+/, '').trim();
-                sendPrompt(text);
-                return;
-            }
-
-            // Action buttons
-            const actionBtn = target.closest('.action-btn');
-            if (actionBtn) {
-                e.preventDefault();
-                if (actionBtn.textContent.includes('Scan Workspace')) {
-                    triggerScan();
-                } else if (actionBtn.textContent.includes('Start WIA Daemon')) {
-                    triggerDaemon();
+            window.addEventListener('message', function(event) {
+                var msg = event.data;
+                if (!msg) return;
+                if (msg.command === 'addMessage') {
+                    appendMsg(msg.sender, msg.text, msg.citations, msg.intent, msg.showScanBtn, msg.showDaemonBtn);
+                } else if (msg.command === 'setThinking') {
+                    var box = document.getElementById('thinkingBox');
+                    if (box) box.style.display = msg.isThinking ? 'flex' : 'none';
+                    if (msg.isThinking) {
+                        var chat = document.getElementById('chat');
+                        if (chat) chat.scrollTop = chat.scrollHeight;
+                    }
                 }
-                return;
-            }
-
-            // Citation buttons
-            const citeBtn = target.closest('.cite-btn');
-            if (citeBtn) {
-                e.preventDefault();
-                const fp = citeBtn.getAttribute('data-filepath');
-                const line = parseInt(citeBtn.getAttribute('data-line') || '1', 10);
-                if (fp) {
-                    postToExtension({ command: 'openCitation', filePath: fp, line: line });
-                }
-                return;
-            }
-        });
-
-        window.addEventListener('message', event => {
-            const msg = event.data;
-            if (!msg) return;
-            if (msg.command === 'addMessage') {
-                appendMsg(msg.sender, msg.text, msg.citations, msg.intent, msg.showScanBtn, msg.showDaemonBtn);
-            } else if (msg.command === 'setThinking') {
-                document.getElementById('thinkingBox').style.display = msg.isThinking ? 'flex' : 'none';
-                if (msg.isThinking) {
-                    const chat = document.getElementById('chat');
-                    chat.scrollTop = chat.scrollHeight;
-                }
-            }
-        });
+            });
+        })();
     </script>
 </body>
 </html>`;
+    }
+    getNonce() {
+        let text = '';
+        const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+        for (let i = 0; i < 32; i++) {
+            text += possible.charAt(Math.floor(Math.random() * possible.length));
+        }
+        return text;
     }
 }
 exports.WiaChatPanel = WiaChatPanel;

@@ -28,6 +28,15 @@ import { EnvironmentRepairEngine } from '../environment/envRepair';
 import { WiaLLMClient } from '../llm/llmClient';
 import { CANONICAL_WIA_COMMAND_REGISTRY } from '../registry/wiaCommandRegistry';
 
+function getNonce(): string {
+    let text = '';
+    const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    for (let i = 0; i < 32; i++) {
+        text += possible.charAt(Math.floor(Math.random() * possible.length));
+    }
+    return text;
+}
+
 function escapeHtml(text: any): string {
     if (text === null || text === undefined) return '';
     return String(text)
@@ -533,6 +542,7 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
     }
 
     private getHtmlForOnboarding(): string {
+        const nonce = getNonce();
         return this.wrapHtml(`
             <div class="onboarding-card">
                 <div class="brand-header">
@@ -544,7 +554,7 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
 
                 <div class="form-group">
                     <label>AI Provider</label>
-                    <select id="providerSelect" class="form-control" onchange="onProviderChange()">
+                    <select id="providerSelect" class="form-control">
                         <option value="openrouter" selected>OpenRouter (Recommended)</option>
                         <option value="nvidia">NVIDIA NIM</option>
                         <option value="openai">OpenAI (GPT-4o)</option>
@@ -568,77 +578,86 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
                 <div id="testStatusMessage" class="status-msg"></div>
 
                 <div class="button-row">
-                    <button class="btn btn-secondary" id="btnVerify" type="button" onclick="testConnection()">Verify Connection</button>
-                    <button class="btn btn-primary" id="btnSave" type="button" onclick="saveConfiguration()">Save & Continue</button>
+                    <button class="btn btn-secondary" id="btnVerify" type="button">Verify Connection</button>
+                    <button class="btn btn-primary" id="btnSave" type="button">Save & Continue</button>
                 </div>
             </div>
 
-            <script>
-                const vscode = acquireVsCodeApi();
-                const defaultModels = {
-                    openrouter: 'anthropic/claude-3.5-sonnet',
-                    nvidia: 'meta/llama-3.1-70b-instruct',
-                    openai: 'gpt-4o',
-                    anthropic: 'claude-3-5-sonnet-20241022',
-                    gemini: 'gemini-1.5-flash',
-                    local: 'offline-deterministic'
-                };
-
-                function onProviderChange() {
-                    const sel = document.getElementById('providerSelect').value;
-                    const modelInput = document.getElementById('modelInput');
-                    const apiKeyGroup = document.getElementById('apiKeyGroup');
-                    modelInput.value = defaultModels[sel] || '';
-
-                    if (sel === 'local') {
-                        apiKeyGroup.style.display = 'none';
-                    } else {
-                        apiKeyGroup.style.display = 'block';
+            <script nonce="${nonce}">
+                (function() {
+                    var vscode;
+                    try {
+                        vscode = acquireVsCodeApi();
+                    } catch (e) {
+                        vscode = window.vscode || (typeof acquireVsCodeApi !== 'undefined' ? acquireVsCodeApi() : null);
                     }
-                }
-                window.onProviderChange = onProviderChange;
+                    window.vscode = vscode;
 
-                function testConnection() {
-                    const provider = document.getElementById('providerSelect').value;
-                    const apiKey = document.getElementById('apiKeyInput').value;
-                    if (vscode && vscode.postMessage) {
-                        vscode.postMessage({ type: 'testConnection', provider, apiKey });
-                    }
-                }
-                window.testConnection = testConnection;
+                    var defaultModels = {
+                        openrouter: 'anthropic/claude-3.5-sonnet',
+                        nvidia: 'meta/llama-3.1-70b-instruct',
+                        openai: 'gpt-4o',
+                        anthropic: 'claude-3-5-sonnet-20241022',
+                        gemini: 'gemini-1.5-flash',
+                        local: 'offline-deterministic'
+                    };
 
-                function saveConfiguration() {
-                    const provider = document.getElementById('providerSelect').value;
-                    const model = document.getElementById('modelInput').value;
-                    const apiKey = document.getElementById('apiKeyInput').value;
-                    if (vscode && vscode.postMessage) {
-                        vscode.postMessage({ type: 'saveAiConfig', provider, model, apiKey });
-                    }
-                }
-                window.saveConfiguration = saveConfiguration;
+                    function onProviderChange() {
+                        var sel = document.getElementById('providerSelect').value;
+                        var modelInput = document.getElementById('modelInput');
+                        var apiKeyGroup = document.getElementById('apiKeyGroup');
+                        modelInput.value = defaultModels[sel] || '';
 
-                const btnVerify = document.getElementById('btnVerify');
-                if (btnVerify) btnVerify.addEventListener('click', testConnection);
-                const btnSave = document.getElementById('btnSave');
-                if (btnSave) btnSave.addEventListener('click', saveConfiguration);
-
-                window.addEventListener('message', event => {
-                    const msg = event.data;
-                    if (msg && msg.type === 'testStatus') {
-                        const el = document.getElementById('testStatusMessage');
-                        if (el) {
-                            el.innerText = msg.message;
-                            el.className = 'status-msg ' + msg.status;
+                        if (sel === 'local') {
+                            apiKeyGroup.style.display = 'none';
+                        } else {
+                            apiKeyGroup.style.display = 'block';
                         }
                     }
-                });
+
+                    function testConnection() {
+                        var provider = document.getElementById('providerSelect').value;
+                        var apiKey = document.getElementById('apiKeyInput').value;
+                        if (vscode && vscode.postMessage) {
+                            vscode.postMessage({ type: 'testConnection', provider: provider, apiKey: apiKey });
+                        }
+                    }
+
+                    function saveConfiguration() {
+                        var provider = document.getElementById('providerSelect').value;
+                        var model = document.getElementById('modelInput').value;
+                        var apiKey = document.getElementById('apiKeyInput').value;
+                        if (vscode && vscode.postMessage) {
+                            vscode.postMessage({ type: 'saveAiConfig', provider: provider, model: model, apiKey: apiKey });
+                        }
+                    }
+
+                    var providerSelect = document.getElementById('providerSelect');
+                    if (providerSelect) providerSelect.addEventListener('change', onProviderChange);
+                    var btnVerify = document.getElementById('btnVerify');
+                    if (btnVerify) btnVerify.addEventListener('click', testConnection);
+                    var btnSave = document.getElementById('btnSave');
+                    if (btnSave) btnSave.addEventListener('click', saveConfiguration);
+
+                    window.addEventListener('message', function(event) {
+                        var msg = event.data;
+                        if (msg && msg.type === 'testStatus') {
+                            var el = document.getElementById('testStatusMessage');
+                            if (el) {
+                                el.innerText = msg.message;
+                                el.className = 'status-msg ' + msg.status;
+                            }
+                        }
+                    });
+                })();
             </script>
-        `);
+        `, nonce);
     }
 
     private getHtmlForAuthorization(): string {
         const root = this.getRootPath();
         const wsName = root ? path.basename(root) : 'Workspace';
+        const nonce = getNonce();
         return this.wrapHtml(`
             <div class="onboarding-card">
                 <div class="brand-header">
@@ -657,25 +676,35 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
                 </div>
 
                 <div class="button-row" style="margin-top: 20px;">
-                    <button class="btn btn-primary" id="btnAuth" type="button" onclick="authorize()">Authorize & Analyze Workspace</button>
+                    <button class="btn btn-primary" id="btnAuth" type="button">Authorize & Analyze Workspace</button>
                 </div>
             </div>
 
-            <script>
-                const vscode = acquireVsCodeApi();
-                function authorize() {
-                    if (vscode && vscode.postMessage) {
-                        vscode.postMessage({ type: 'authorizeWorkspace' });
+            <script nonce="${nonce}">
+                (function() {
+                    var vscode;
+                    try {
+                        vscode = acquireVsCodeApi();
+                    } catch (e) {
+                        vscode = window.vscode || (typeof acquireVsCodeApi !== 'undefined' ? acquireVsCodeApi() : null);
                     }
-                }
-                window.authorize = authorize;
-                const btnAuth = document.getElementById('btnAuth');
-                if (btnAuth) btnAuth.addEventListener('click', authorize);
+                    window.vscode = vscode;
+
+                    function authorize() {
+                        if (vscode && vscode.postMessage) {
+                            vscode.postMessage({ type: 'authorizeWorkspace' });
+                        }
+                    }
+
+                    var btnAuth = document.getElementById('btnAuth');
+                    if (btnAuth) btnAuth.addEventListener('click', authorize);
+                })();
             </script>
-        `);
+        `, nonce);
     }
 
     private getHtmlForAnalysisProgress(): string {
+        const nonce = getNonce();
         return this.wrapHtml(`
             <div class="center-card">
                 <div class="spinner"></div>
@@ -686,19 +715,28 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
                 </div>
             </div>
 
-            <script>
-                const vscode = acquireVsCodeApi();
-                window.addEventListener('message', event => {
-                    const msg = event.data;
-                    if (msg && msg.type === 'analysisProgress') {
-                        const s = document.getElementById('progressStep');
-                        const b = document.getElementById('progressBar');
-                        if (s) s.innerText = msg.step;
-                        if (b) b.style.width = msg.percent + '%';
+            <script nonce="${nonce}">
+                (function() {
+                    var vscode;
+                    try {
+                        vscode = acquireVsCodeApi();
+                    } catch (e) {
+                        vscode = window.vscode || (typeof acquireVsCodeApi !== 'undefined' ? acquireVsCodeApi() : null);
                     }
-                });
+                    window.vscode = vscode;
+
+                    window.addEventListener('message', function(event) {
+                        var msg = event.data;
+                        if (msg && msg.type === 'analysisProgress') {
+                            var s = document.getElementById('progressStep');
+                            var b = document.getElementById('progressBar');
+                            if (s) s.innerText = msg.step;
+                            if (b) b.style.width = msg.percent + '%';
+                        }
+                    });
+                })();
             </script>
-        `);
+        `, nonce);
     }
 
     private getHtmlForDashboard(): string {
@@ -788,13 +826,15 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
                 </div>
 
                 <div class="quick-action-row">
-                    <button class="action-chip" type="button" data-query="Show architecture" onclick="askQuick('Show architecture')">🗺️ Architecture</button>
-                    <button class="action-chip" type="button" data-query="Check dependencies" onclick="askQuick('Check dependencies')">📦 Dependencies</button>
-                    <button class="action-chip" type="button" data-query="Check environment" onclick="askQuick('Check environment')">🩺 Doctor</button>
-                    <button class="action-chip" type="button" data-query="Show project status" onclick="askQuick('Show project status')">📊 Status</button>
+                    <button class="action-chip" type="button" data-query="Show architecture">🗺️ Architecture</button>
+                    <button class="action-chip" type="button" data-query="Check dependencies">📦 Dependencies</button>
+                    <button class="action-chip" type="button" data-query="Check environment">🩺 Doctor</button>
+                    <button class="action-chip" type="button" data-query="Show project status">📊 Status</button>
                 </div>
             </div>
         `;
+
+        const nonce = getNonce();
 
         return this.wrapHtml(`
             <div class="dashboard-header">
@@ -805,7 +845,7 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
                             ${isHealthy ? '● Ready' : errors.length > 0 ? '✕ ' + errors.length + (errors.length === 1 ? ' Error' : ' Errors') : '⚠ ' + warnings.length + (warnings.length === 1 ? ' Issue' : ' Issues')}
                         </span>
                     </div>
-                    <button class="icon-btn" id="btnSettings" type="button" onclick="openSettings()" title="Settings">⚙</button>
+                    <button class="icon-btn" id="btnSettings" type="button" title="Settings">⚙</button>
                 </div>
                 <div class="project-meta">
                     <div class="proj-name">${escapeHtml(wsName)}</div>
@@ -813,10 +853,10 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
                 </div>
 
                 <div class="quick-nav-pills">
-                    <button class="nav-pill" type="button" data-tab="architecture" onclick="triggerTab('architecture')">Architecture</button>
-                    <button class="nav-pill" type="button" data-tab="dependencies" onclick="triggerTab('dependencies')">Dependencies</button>
-                    <button class="nav-pill" type="button" data-tab="environment" onclick="triggerTab('environment')">Environment</button>
-                    <button class="nav-pill" type="button" data-tab="status" onclick="triggerTab('status')">Status</button>
+                    <button class="nav-pill" type="button" data-tab="architecture">Architecture</button>
+                    <button class="nav-pill" type="button" data-tab="dependencies">Dependencies</button>
+                    <button class="nav-pill" type="button" data-tab="environment">Environment</button>
+                    <button class="nav-pill" type="button" data-tab="status">Status</button>
                 </div>
             </div>
 
@@ -830,60 +870,37 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
 
             <div class="chat-input-bar">
                 <textarea id="chatInput" placeholder="Ask anything about this workspace..." rows="2"></textarea>
-                <button class="btn-send" id="btnSend" type="button" onclick="sendQuery()">Send</button>
+                <button class="btn-send" id="btnSend" type="button">Send</button>
             </div>
 
-            <script>
-                var vscode;
-                try {
-                    vscode = acquireVsCodeApi();
-                } catch (e) {
-                    vscode = window.vscode || (typeof acquireVsCodeApi !== 'undefined' ? acquireVsCodeApi() : null);
-                }
-                window.vscode = vscode;
-
-                function postToExtension(msg) {
+            <script nonce="${nonce}">
+                (function() {
+                    var vscode;
                     try {
-                        var api = window.vscode || (typeof vscode !== 'undefined' ? vscode : null);
-                        if (api && api.postMessage) {
-                            api.postMessage(msg);
-                        } else {
-                            console.warn('VSCode API not available:', msg);
-                        }
-                    } catch (err) {
-                        console.error('postToExtension error:', err);
+                        vscode = acquireVsCodeApi();
+                    } catch (e) {
+                        vscode = window.vscode || (typeof acquireVsCodeApi !== 'undefined' ? acquireVsCodeApi() : null);
                     }
-                }
-                window.postToExtension = postToExtension;
+                    window.vscode = vscode;
 
-                window.openSettings = function() {
-                    postToExtension({ type: 'openSettings' });
-                };
+                    function postToExtension(msg) {
+                        try {
+                            if (vscode && vscode.postMessage) {
+                                vscode.postMessage(msg);
+                            } else if (window.vscode && window.vscode.postMessage) {
+                                window.vscode.postMessage(msg);
+                            } else {
+                                console.warn('VSCode API unavailable:', msg);
+                            }
+                        } catch (err) {
+                            console.error('postToExtension error:', err);
+                        }
+                    }
 
-                window.triggerTab = function(tab) {
-                    let label = 'Show architecture';
-                    if (tab === 'dependencies') label = 'Check dependencies';
-                    else if (tab === 'environment') label = 'Check environment';
-                    else if (tab === 'status') label = 'Show project status';
-                    window.askQuick(label);
-                };
-
-                window.askQuick = function(query) {
-                    if (!query) return;
-                    appendUserMessage(query);
-                    showStatus('Routing query via Laya: ' + query + '...');
-                    postToExtension({ type: 'askAgent', query: query });
-                };
-
-                window.authorizeRepair = function(cmd) {
-                    postToExtension({ type: 'authorizeRepair', command: cmd });
-                };
-
-                function sendQuery() {
-                    try {
-                        const input = document.getElementById('chatInput');
+                    function sendQuery() {
+                        var input = document.getElementById('chatInput');
                         if (!input) return;
-                        const query = (input.value || '').trim();
+                        var query = (input.value || '').trim();
                         if (!query) return;
 
                         input.value = '';
@@ -891,290 +908,283 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
                         appendUserMessage(query);
                         showStatus('Routing query via Laya: ' + query + '...');
                         postToExtension({ type: 'askAgent', query: query });
-                    } catch (err) {
-                        console.error('sendQuery error:', err);
                     }
-                }
-                window.sendQuery = sendQuery;
 
-                function handleKey(e) {
-                    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
-                        e.preventDefault();
-                        sendQuery();
+                    function askQuick(query) {
+                        if (!query) return;
+                        appendUserMessage(query);
+                        showStatus('Routing query via Laya: ' + query + '...');
+                        postToExtension({ type: 'askAgent', query: query });
                     }
-                }
 
-                function showStatus(text) {
-                    const existing = document.getElementById('tempStatus');
-                    if (existing) existing.remove();
+                    function triggerTab(tab) {
+                        var label = 'Show architecture';
+                        if (tab === 'dependencies') label = 'Check dependencies';
+                        else if (tab === 'environment') label = 'Check environment';
+                        else if (tab === 'status') label = 'Show project status';
+                        askQuick(label);
+                    }
 
-                    const c = document.getElementById('chatContainer');
-                    if (c) {
-                        const div = document.createElement('div');
-                        div.id = 'tempStatus';
-                        div.className = 'status-indicator';
-                        div.innerHTML = '<span class="spin-dot">●</span> ' + escapeText(text);
+                    function openSettings() {
+                        postToExtension({ type: 'openSettings' });
+                    }
+
+                    function showStatus(text) {
+                        var existing = document.getElementById('tempStatus');
+                        if (existing) existing.remove();
+
+                        var c = document.getElementById('chatContainer');
+                        if (c) {
+                            var div = document.createElement('div');
+                            div.id = 'tempStatus';
+                            div.className = 'status-indicator';
+                            div.innerHTML = '<span class="spin-dot">●</span> ' + escapeText(text);
+                            c.appendChild(div);
+                            c.scrollTop = c.scrollHeight;
+                        }
+                    }
+
+                    function appendUserMessage(text) {
+                        var c = document.getElementById('chatContainer');
+                        if (!c) return;
+                        var div = document.createElement('div');
+                        div.className = 'message user-message';
+                        div.innerHTML = '<div class="msg-content">' + escapeText(text) + '</div>';
                         c.appendChild(div);
                         c.scrollTop = c.scrollHeight;
                     }
-                }
 
-                function appendUserMessage(text) {
-                    const c = document.getElementById('chatContainer');
-                    if (!c) return;
-                    const div = document.createElement('div');
-                    div.className = 'message user-message';
-                    div.innerHTML = '<div class="msg-content">' + escapeText(text) + '</div>';
-                    c.appendChild(div);
-                    c.scrollTop = c.scrollHeight;
-                }
-
-                function appendAssistantMessage(html) {
-                    const c = document.getElementById('chatContainer');
-                    if (!c) return;
-                    const div = document.createElement('div');
-                    div.className = 'message assistant-message';
-                    div.innerHTML = '<div class="msg-content">' + html + '</div>';
-                    c.appendChild(div);
-                    c.scrollTop = c.scrollHeight;
-                }
-
-                function escapeText(str) {
-                    if (!str) return '';
-                    return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\\r?\\n/g, '<br/>');
-                }
-
-                function renderImpactCard(raw) {
-                    if (!raw) return null;
-                    var text = raw.replace(/\x1B\[[0-9;]*[mK]/g, '');
-                    if (text.indexOf("Impact Analysis for '") === -1 && text.indexOf("Target Entity:") === -1) {
-                        return null;
+                    function appendAssistantMessage(html) {
+                        var c = document.getElementById('chatContainer');
+                        if (!c) return;
+                        var div = document.createElement('div');
+                        div.className = 'message assistant-message';
+                        div.innerHTML = '<div class="msg-content">' + html + '</div>';
+                        c.appendChild(div);
+                        c.scrollTop = c.scrollHeight;
                     }
 
-                    var targetMatch = text.match(/Impact Analysis for '([^']+)'/) || text.match(/Target Entity:\s*(.*)/);
-                    var target = targetMatch ? targetMatch[1].trim() : 'Entity';
+                    function escapeText(str) {
+                        if (!str) return '';
+                        return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\\r?\\n/g, '<br/>');
+                    }
 
-                    var definedMatch = text.match(/Defined In:\s*(.*)/);
-                    var definedIn = definedMatch ? definedMatch[1].trim() : '';
+                    function renderImpactCard(raw) {
+                        if (!raw) return null;
+                        var text = raw.replace(/\x1B\[[0-9;]*[mK]/g, '');
+                        if (text.indexOf("Impact Analysis for '") === -1 && text.indexOf("Target Entity:") === -1) {
+                            return null;
+                        }
 
-                    var typeMatch = text.match(/Target Type:\s*(.*)/);
-                    var targetType = typeMatch ? typeMatch[1].trim() : 'symbol';
+                        var targetMatch = text.match(/Impact Analysis for '([^']+)'/) || text.match(/Target Entity:\s*(.*)/);
+                        var target = targetMatch ? targetMatch[1].trim() : 'Entity';
 
-                    var riskMatch = text.match(/Risk Classification:\s*(HIGH|MEDIUM|LOW)/i);
-                    var risk = riskMatch ? riskMatch[1].toUpperCase() : 'LOW';
-                    var riskClass = risk.toLowerCase();
+                        var definedMatch = text.match(/Defined In:\s*(.*)/);
+                        var definedIn = definedMatch ? definedMatch[1].trim() : '';
 
-                    var explMatch = text.match(/Explanation:\s*([\s\S]*?)(?=\\r?\\n\\r?\\n|\\r?\\n[A-Z][a-zA-Z\\s\\-]+(?:\\(\\d+\\))?:|$)/);
-                    var explanation = explMatch ? explMatch[1].trim() : '';
+                        var typeMatch = text.match(/Target Type:\s*(.*)/);
+                        var targetType = typeMatch ? typeMatch[1].trim() : 'symbol';
 
-                    function extractList(headerRegex) {
-                        var match = text.match(headerRegex);
-                        if (!match) return [];
-                        var lines = match[1].split(/\\r?\\n/);
-                        var items = [];
-                        for (var i = 0; i < lines.length; i++) {
-                            var trimmed = lines[i].trim();
-                            if (trimmed.startsWith('*') || trimmed.startsWith('-')) {
-                                var item = trimmed.replace(/^[\\*\\-]\\s*/, '').trim();
-                                if (item && !item.toLowerCase().startsWith('no ') && item.indexOf('additional consuming modules') === -1 && item.indexOf('additional affected files') === -1) {
-                                    items.push(item);
+                        var riskMatch = text.match(/Risk Classification:\s*(HIGH|MEDIUM|LOW)/i);
+                        var risk = riskMatch ? riskMatch[1].toUpperCase() : 'LOW';
+                        var riskClass = risk.toLowerCase();
+
+                        var explMatch = text.match(/Explanation:\s*([\s\S]*?)(?=\\r?\\n\\r?\\n|\\r?\\n[A-Z][a-zA-Z\\s\\-]+(?:\\(\\d+\\))?:|$)/);
+                        var explanation = explMatch ? explMatch[1].trim() : '';
+
+                        function extractList(headerRegex) {
+                            var match = text.match(headerRegex);
+                            if (!match) return [];
+                            var lines = match[1].split(/\\r?\\n/);
+                            var items = [];
+                            for (var i = 0; i < lines.length; i++) {
+                                var trimmed = lines[i].trim();
+                                if (trimmed.startsWith('*') || trimmed.startsWith('-')) {
+                                    var item = trimmed.replace(/^[\\*\\-]\\s*/, '').trim();
+                                    if (item && !item.toLowerCase().startsWith('no ') && item.indexOf('additional consuming modules') === -1 && item.indexOf('additional affected files') === -1) {
+                                        items.push(item);
+                                    }
                                 }
                             }
+                            return items;
                         }
-                        return items;
-                    }
 
-                    var callers = extractList(/(?:Direct Symbol Callers|File-Level Dependents[^:\n]*):\s*([\s\S]*?)(?=\\r?\\n===|\\r?\\n[A-Z][a-zA-Z\\s\\-]+(?:\\(\\d+\\))?:|$)/);
-                    var affected = extractList(/Affected Files[^:\n]*:\s*([\s\S]*?)(?=\\r?\\n===|\\r?\\n[A-Z][a-zA-Z\\s\\-]+(?:\\(\\d+\\))?:|$)/);
+                        var callers = extractList(/(?:Direct Symbol Callers|File-Level Dependents[^:\n]*):\s*([\s\S]*?)(?=\\r?\\n===|\\r?\\n[A-Z][a-zA-Z\\s\\-]+(?:\\(\\d+\\))?:|$)/);
+                        var affected = extractList(/Affected Files[^:\n]*:\s*([\s\S]*?)(?=\\r?\\n===|\\r?\\n[A-Z][a-zA-Z\\s\\-]+(?:\\(\\d+\\))?:|$)/);
 
-                    var callersHtml = '';
-                    if (callers.length > 0) {
-                        var cItems = '';
-                        for (var j = 0; j < callers.length; j++) {
-                            var c = callers[j];
-                            var cleanPath = c.replace(/\\s*\\(.*?\\)$/, '').trim();
-                            cItems += '<div class="impact-file-item" data-filepath="' + escapeText(cleanPath) + '" onclick="postToExtension({type:\'openFile\',filePath:\'' + cleanPath.replace(/'/g, "\\'") + '\'})" title="Click to open ' + cleanPath + '">📄 ' + escapeText(c) + '</div>';
+                        var callersHtml = '';
+                        if (callers.length > 0) {
+                            var cItems = '';
+                            for (var j = 0; j < callers.length; j++) {
+                                var c = callers[j];
+                                var cleanPath = c.replace(/\\s*\\(.*?\\)$/, '').trim();
+                                cItems += '<div class="impact-file-item" data-filepath="' + escapeText(cleanPath) + '" title="Click to open ' + cleanPath + '">📄 ' + escapeText(c) + '</div>';
+                            }
+                            callersHtml = '<div class="impact-section">' +
+                                '<div class="impact-sec-title">Direct Callers / Dependents (' + callers.length + ')</div>' +
+                                '<div class="impact-file-list">' + cItems + '</div>' +
+                            '</div>';
                         }
-                        callersHtml = '<div class="impact-section">' +
-                            '<div class="impact-sec-title">Direct Callers / Dependents (' + callers.length + ')</div>' +
-                            '<div class="impact-file-list">' + cItems + '</div>' +
+
+                        var affectedHtml = '';
+                        if (affected.length > 0) {
+                            var aItems = '';
+                            for (var k = 0; k < affected.length; k++) {
+                                var a = affected[k];
+                                aItems += '<div class="impact-file-item" data-filepath="' + escapeText(a) + '" title="Click to open ' + a + '">📄 ' + escapeText(a) + '</div>';
+                            }
+                            var isOpen = callers.length === 0 ? ' open' : '';
+                            affectedHtml = '<details class="impact-details"' + isOpen + '>' +
+                                '<summary>Affected Files (' + affected.length + ')</summary>' +
+                                '<div class="impact-file-list" style="margin-top: 6px;">' + aItems + '</div>' +
+                            '</details>';
+                        }
+
+                        var definedHtml = definedIn ? '<span class="impact-tag file-tag" data-filepath="' + escapeText(definedIn) + '" title="Open ' + definedIn + '">📁 ' + escapeText(definedIn) + '</span>' : '';
+                        var explHtml = explanation ? '<div class="impact-explanation">' + escapeText(explanation) + '</div>' : '';
+
+                        return '<div class="impact-card">' +
+                            '<div class="impact-header-row">' +
+                                '<div class="impact-title-group">' +
+                                    '<span class="impact-icon">⚡</span>' +
+                                    '<span class="impact-title">Impact: <strong>' + escapeText(target) + '</strong></span>' +
+                                '</div>' +
+                                '<span class="risk-badge risk-' + riskClass + '">' + risk + ' RISK</span>' +
+                            '</div>' +
+                            '<div class="impact-meta-row">' +
+                                '<span class="impact-tag"><span class="tag-lbl">Type:</span> ' + escapeText(targetType) + '</span>' +
+                                definedHtml +
+                            '</div>' +
+                            explHtml +
+                            callersHtml +
+                            affectedHtml +
                         '</div>';
                     }
 
-                    var affectedHtml = '';
-                    if (affected.length > 0) {
-                        var aItems = '';
-                        for (var k = 0; k < affected.length; k++) {
-                            var a = affected[k];
-                            aItems += '<div class="impact-file-item" data-filepath="' + escapeText(a) + '" onclick="postToExtension({type:\'openFile\',filePath:\'' + a.replace(/'/g, "\\'") + '\'})" title="Click to open ' + a + '">📄 ' + escapeText(a) + '</div>';
+                    function formatMarkdown(str) {
+                        if (!str) return '';
+                        var out = String(str);
+
+                        // Strip ANSI color codes
+                        out = out.replace(/\x1B\[[0-9;]*[mK]/g, '');
+
+                        var impactCard = renderImpactCard(out);
+                        if (impactCard) {
+                            return impactCard;
                         }
-                        var isOpen = callers.length === 0 ? ' open' : '';
-                        affectedHtml = '<details class="impact-details"' + isOpen + '>' +
-                            '<summary>Affected Files (' + affected.length + ')</summary>' +
-                            '<div class="impact-file-list" style="margin-top: 6px;">' + aItems + '</div>' +
-                        '</details>';
+
+                        var codeBlocks = [];
+                        out = out.replace(new RegExp('\\x60\\x60\\x60([a-zA-Z0-9_-]*)\\r?\\n([\\s\\S]*?)\\x60\\x60\\x60', 'gi'), function(match, lang, code) {
+                            var id = '___CODEBLOCK_' + codeBlocks.length + '___';
+                            var escaped = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                            codeBlocks.push('<pre class="code-block"><code>' + escaped + '</code></pre>');
+                            return id;
+                        });
+
+                        out = out.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                        out = out.replace(/^=== (.*?) ===$/gim, '<div class="section-divider">$1</div>');
+                        out = out.replace(/^#### (.*$)/gim, '<h4 class="md-h4">$1</h4>');
+                        out = out.replace(/^### (.*$)/gim, '<h3 class="md-h3">$1</h3>');
+                        out = out.replace(/^## (.*$)/gim, '<h2 class="md-h2">$1</h2>');
+                        out = out.replace(/^# (.*$)/gim, '<h1 class="md-h1">$1</h1>');
+                        out = out.replace(/\\*\\*(.*?)\\*\\*/g, '<strong>$1</strong>');
+                        out = out.replace(/\\*(.*?)\\*/g, '<em>$1</em>');
+                        out = out.replace(new RegExp('\\x60([^\\x60]+)\\x60', 'g'), '<code>$1</code>');
+                        out = out.replace(/^\\s*[\\*\\-]\\s+(.*$)/gim, '<div class="list-item"><span class="bullet">•</span> $1</div>');
+                        out = out.replace(/\\r?\\n/g, '<br/>');
+
+                        codeBlocks.forEach(function(block, idx) {
+                            out = out.replace('___CODEBLOCK_' + idx + '___', block);
+                        });
+
+                        return out;
                     }
 
-                    var definedHtml = definedIn ? '<span class="impact-tag file-tag" data-filepath="' + escapeText(definedIn) + '" onclick="postToExtension({type:\'openFile\',filePath:\'' + definedIn.replace(/'/g, "\\'") + '\'})" title="Open ' + definedIn + '">📁 ' + escapeText(definedIn) + '</span>' : '';
-                    var explHtml = explanation ? '<div class="impact-explanation">' + escapeText(explanation) + '</div>' : '';
+                    // Global Delegated Event Handlers
+                    document.addEventListener('click', function(e) {
+                        var target = e.target;
+                        if (!target) return;
 
-                    return '<div class="impact-card">' +
-                        '<div class="impact-header-row">' +
-                            '<div class="impact-title-group">' +
-                                '<span class="impact-icon">⚡</span>' +
-                                '<span class="impact-title">Impact: <strong>' + escapeText(target) + '</strong></span>' +
-                            '</div>' +
-                            '<span class="risk-badge risk-' + riskClass + '">' + risk + ' RISK</span>' +
-                        '</div>' +
-                        '<div class="impact-meta-row">' +
-                            '<span class="impact-tag"><span class="tag-lbl">Type:</span> ' + escapeText(targetType) + '</span>' +
-                            definedHtml +
-                        '</div>' +
-                        explHtml +
-                        callersHtml +
-                        affectedHtml +
-                    '</div>';
-                }
+                        // 1. Send Button
+                        if (target.id === 'btnSend' || target.closest('#btnSend')) {
+                            e.preventDefault();
+                            sendQuery();
+                            return;
+                        }
 
-                function formatMarkdown(str) {
-                    if (!str) return '';
-                    let out = String(str);
+                        // 2. Settings Button
+                        if (target.id === 'btnSettings' || target.classList.contains('icon-btn') || target.closest('.icon-btn')) {
+                            e.preventDefault();
+                            openSettings();
+                            return;
+                        }
 
-                    // Strip ANSI color codes from CLI outputs
-                    out = out.replace(/\x1B\[[0-9;]*[mK]/g, '');
+                        // 3. Nav Pills
+                        var navPill = target.closest('.nav-pill');
+                        if (navPill) {
+                            e.preventDefault();
+                            var tab = navPill.getAttribute('data-tab') || navPill.textContent.trim().toLowerCase();
+                            triggerTab(tab);
+                            return;
+                        }
 
-                    // Check for specialized card renderers
-                    const impactCard = renderImpactCard(out);
-                    if (impactCard) {
-                        return impactCard;
-                    }
+                        // 4. Quick Action Chips
+                        var actionChip = target.closest('.action-chip');
+                        if (actionChip) {
+                            e.preventDefault();
+                            var query = actionChip.getAttribute('data-query') || actionChip.textContent.replace(/^[^\w]+/, '').trim();
+                            askQuick(query);
+                            return;
+                        }
 
-                    // 1. Extract and preserve code blocks
-                    const codeBlocks = [];
-                    out = out.replace(new RegExp('\\x60\\x60\\x60([a-zA-Z0-9_-]*)\\r?\\n([\\s\\S]*?)\\x60\\x60\\x60', 'gi'), (match, lang, code) => {
-                        const id = '___CODEBLOCK_' + codeBlocks.length + '___';
-                        const escaped = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-                        codeBlocks.push('<pre class="code-block"><code>' + escaped + '</code></pre>');
-                        return id;
+                        // 5. Impact Files / Links
+                        var fileItem = target.closest('.impact-file-item, .impact-tag.file-tag');
+                        if (fileItem) {
+                            e.preventDefault();
+                            var fp = fileItem.getAttribute('data-filepath') || fileItem.textContent.replace(/^[^\w/\\.]+/, '').trim();
+                            if (fp) postToExtension({ type: 'openFile', filePath: fp });
+                            return;
+                        }
                     });
 
-                    // 2. Escape HTML
-                    out = out.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                    // Chat Input Enter Key
+                    var chatInput = document.getElementById('chatInput');
+                    if (chatInput) {
+                        chatInput.addEventListener('keydown', function(e) {
+                            if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+                                e.preventDefault();
+                                sendQuery();
+                            }
+                        });
+                    }
 
-                    // 3. Section dividers (e.g. === Architecture Intelligence ===)
-                    out = out.replace(/^=== (.*?) ===$/gim, '<div class="section-divider">$1</div>');
-
-                    // 4. Headers
-                    out = out.replace(/^#### (.*$)/gim, '<h4 class="md-h4">$1</h4>');
-                    out = out.replace(/^### (.*$)/gim, '<h3 class="md-h3">$1</h3>');
-                    out = out.replace(/^## (.*$)/gim, '<h2 class="md-h2">$1</h2>');
-                    out = out.replace(/^# (.*$)/gim, '<h1 class="md-h1">$1</h1>');
-
-                    // 5. Bold and Italic
-                    out = out.replace(/\\*\\*(.*?)\\*\\*/g, '<strong>$1</strong>');
-                    out = out.replace(/\\*(.*?)\\*/g, '<em>$1</em>');
-
-                    // 6. Inline code
-                    out = out.replace(new RegExp('\\x60([^\\x60]+)\\x60', 'g'), '<code>$1</code>');
-
-                    // 7. Bullet lists
-                    out = out.replace(/^\\s*[\\*\\-]\\s+(.*$)/gim, '<div class="list-item"><span class="bullet">•</span> $1</div>');
-
-                    // 8. Newlines
-                    out = out.replace(/\\r?\\n/g, '<br/>');
-
-                    // 9. Restore code blocks
-                    codeBlocks.forEach((block, idx) => {
-                        out = out.replace('___CODEBLOCK_' + idx + '___', block);
+                    // Incoming Extension Messages
+                    window.addEventListener('message', function(event) {
+                        var msg = event.data;
+                        if (!msg) return;
+                        if (msg.type === 'queryStarted') {
+                            // indicated
+                        } else if (msg.type === 'statusUpdate') {
+                            showStatus(msg.step);
+                        } else if (msg.type === 'queryResult') {
+                            var temp = document.getElementById('tempStatus');
+                            if (temp) temp.remove();
+                            appendAssistantMessage(formatMarkdown(msg.content));
+                        }
                     });
-
-                    return out;
-                }
-
-                // Attach event listeners & delegation
-                const chatInputEl = document.getElementById('chatInput');
-                if (chatInputEl) {
-                    chatInputEl.addEventListener('keydown', handleKey);
-                }
-                const btnSendEl = document.getElementById('btnSend');
-                if (btnSendEl) {
-                    btnSendEl.addEventListener('click', function(e) {
-                        e.preventDefault();
-                        sendQuery();
-                    });
-                }
-
-                // Global event delegation for all buttons and chips
-                document.addEventListener('click', function(e) {
-                    const target = e.target;
-                    if (!target) return;
-
-                    // Send Button
-                    if (target.id === 'btnSend' || target.closest('#btnSend')) {
-                        e.preventDefault();
-                        sendQuery();
-                        return;
-                    }
-
-                    // Settings Button
-                    if (target.id === 'btnSettings' || target.classList.contains('icon-btn') || target.closest('.icon-btn')) {
-                        e.preventDefault();
-                        window.openSettings();
-                        return;
-                    }
-
-                    // Nav Pills
-                    const navPill = target.closest('.nav-pill');
-                    if (navPill) {
-                        e.preventDefault();
-                        const tab = navPill.getAttribute('data-tab') || navPill.textContent.trim().toLowerCase();
-                        window.triggerTab(tab);
-                        return;
-                    }
-
-                    // Quick Action Chips
-                    const actionChip = target.closest('.action-chip');
-                    if (actionChip) {
-                        e.preventDefault();
-                        const query = actionChip.getAttribute('data-query') || actionChip.textContent.replace(/^[^\w]+/, '').trim();
-                        window.askQuick(query);
-                        return;
-                    }
-
-                    // Impact File items
-                    const fileItem = target.closest('.impact-file-item, .impact-tag.file-tag');
-                    if (fileItem) {
-                        e.preventDefault();
-                        const fp = fileItem.getAttribute('data-filepath') || fileItem.textContent.replace(/^[^\w/\\.]+/, '').trim();
-                        if (fp) postToExtension({ type: 'openFile', filePath: fp });
-                        return;
-                    }
-                });
-
-                window.addEventListener('message', event => {
-                    const msg = event.data;
-                    if (!msg) return;
-                    if (msg.type === 'queryStarted') {
-                        // status indicated
-                    } else if (msg.type === 'statusUpdate') {
-                        showStatus(msg.step);
-                    } else if (msg.type === 'queryResult') {
-                        const temp = document.getElementById('tempStatus');
-                        if (temp) temp.remove();
-
-                        appendAssistantMessage(formatMarkdown(msg.content));
-                    }
-                });
+                })();
             </script>
-        `);
+        `, nonce);
     }
 
-    private wrapHtml(bodyContent: string): string {
+    private wrapHtml(bodyContent: string, nonce?: string): string {
+        const scriptNonce = nonce || getNonce();
+        const cspSource = this._view ? this._view.webview.cspSource : 'vscode-webview:';
         return `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta http-equiv="Content-Security-Policy" content="default-src * 'unsafe-inline' 'unsafe-eval' data: blob:; script-src * 'unsafe-inline' 'unsafe-eval' vscode-resource:; style-src * 'unsafe-inline'; font-src * data:; img-src * data: blob: vscode-resource:;">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${cspSource} 'unsafe-inline'; font-src ${cspSource} data:; img-src ${cspSource} https: data: blob:; script-src 'nonce-${scriptNonce}' ${cspSource};">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>WIA</title>
     <style>
