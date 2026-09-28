@@ -136,9 +136,7 @@ class ReportGenerator:
             f"Workspace intelligence has been accumulated across <strong>{len(completed_batches)}</strong> completed analysis batches "
             f"out of <strong>{len(batches)}</strong> total batches ({pct}% completed). Each batch inspects source files, parses AST syntax trees, "
             f"extracts code symbols, scans security rules, and computes component change impact risks."
-        )
-
-        # Component Architecture Breakdown Cards
+        )        # Component Architecture Breakdown Cards
         components_map: dict[str, list[dict]] = {}
         for fd in files_data:
             role_category = fd["role"].split(" — ")[0]
@@ -195,9 +193,11 @@ class ReportGenerator:
             b_files_str = ", ".join([html.escape(p) for p in b.file_paths])
 
             batch_narratives_html += f"""
-            <div class="card batch-card">
+            <div class="card batch-card" id="batch-{b_id_esc.lower().replace(' ', '-')}">
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 0.5rem;">
-                    <h3 style="margin:0; color:var(--accent-color); font-size: 1.05rem;">{b_id_esc} — Technical Narrative</h3>
+                    <h3 style="margin:0; color:var(--accent-color); font-size: 1.05rem;">
+                        <a href="#batch-{b_id_esc.lower().replace(' ', '-')}" class="anchor-link">#</a> {b_id_esc} — Technical Narrative
+                    </h3>
                     {status_badge}
                 </div>
                 <p class="narrative-text" style="font-size:0.9rem; margin-bottom: 0.5rem;">{b_narr}</p>
@@ -214,79 +214,142 @@ class ReportGenerator:
             </div>
             """
 
-        # Build File Intelligence Cards HTML
-        files_cards_html = ""
+        # Group Files by Language
+        files_by_language: dict[str, list[dict]] = {}
         for fd in files_data:
-            rel_p = html.escape(fd["file_path"])
-            lang = html.escape(fd["language"])
-            role = html.escape(fd["role"])
-            purpose = html.escape(fd["purpose"])
-            impact_level = fd["impact_risk_level"]
-            batch_id = html.escape(fd["batch_id"])
+            lang = fd.get("language") or "Other"
+            files_by_language.setdefault(lang, []).append(fd)
 
-            risk_class = (
-                "badge-danger"
-                if impact_level == "HIGH"
-                else "badge-warning"
-                if impact_level == "MEDIUM"
-                else "badge-success"
-            )
+        def _lang_sort_key(item: tuple[str, list[dict]]) -> tuple[int, str]:
+            lname = item[0]
+            if lname == "Python":
+                return (0, lname)
+            if lname == "TypeScript":
+                return (1, lname)
+            if lname == "JavaScript":
+                return (2, lname)
+            if lname == "Other":
+                return (99, lname)
+            return (10, lname)
 
-            symbols_html = ""
-            for s in fd["symbols"]:
-                stype = s.get("symbol_type")
-                if stype == "import":
-                    continue
-                sname = html.escape(s.get("name", ""))
-                doc_raw = s.get("docstring") or ""
-                doc = html.escape(doc_raw.strip())
-                doc_str = f" — <span class='doc-text'>{doc}</span>" if doc else ""
-                symbols_html += f'<li class="sym-item"><span class="sym-type">{stype}</span> <code>{sname}</code>{doc_str}</li>'
+        sorted_lang_groups = sorted(files_by_language.items(), key=_lang_sort_key)
 
-            if not symbols_html:
-                symbols_html = '<li class="text-muted">No top-level functions or classes declared</li>'
+        # Build File Intelligence Cards HTML Grouped by Language with Anchors
+        language_nav_items_html = ""
+        language_filter_pills_html = f'<button class="filter-pill active" onclick="filterLanguage(\'all\', this)">All Files ({len(files_data)})</button>'
+        grouped_files_html = ""
 
-            ws_deps_str = ", ".join([html.escape(d) for d in fd["workspace_dependencies"]]) if fd["workspace_dependencies"] else "None"
-            used_by_str = ", ".join([html.escape(u) for u in fd["used_by"]]) if fd["used_by"] else "None"
-            cls_cnt = len([s for s in fd.get("symbols", []) if s.get("symbol_type") == "class"])
-            func_cnt = len([s for s in fd.get("symbols", []) if s.get("symbol_type") in ("function", "method")])
-            total_sym_cnt = len(fd.get("symbols", []))
+        for lang_name, lang_files in sorted_lang_groups:
+            lang_slug = "".join(c if c.isalnum() or c in "-_" else "_" for c in lang_name.lower())
+            lang_id = f"lang-{lang_slug}"
+            lang_name_esc = html.escape(lang_name)
+            count = len(lang_files)
 
-            file_narrative_text = (
-                f"The file <code>{rel_p}</code> fulfills the architectural role of <strong>{role}</strong>. "
-                f"{purpose} Declares {cls_cnt} class(es) and {func_cnt} function(s). "
-                f"Imports <em>{ws_deps_str}</em> and is imported by <em>{used_by_str}</em>. "
-                f"Evaluated change impact risk: <strong>{impact_level}</strong>."
-            )
+            language_nav_items_html += f"""
+            <li class="nav-sub-item">
+                <a href="#{lang_id}">
+                    <span class="sub-bullet">•</span> {lang_name_esc} <span class="badge badge-outline" style="font-size:0.7rem; padding:0.1rem 0.4rem;">{count}</span>
+                </a>
+            </li>
+            """
 
-            files_cards_html += f"""
-            <div class="card file-card" data-filepath="{rel_p.lower()}" data-batch="{batch_id}">
-                <div class="file-card-header">
-                    <div>
-                        <span class="file-title">{rel_p}</span>
-                        <span class="badge badge-info">{lang}</span>
-                        <span class="badge badge-outline">{batch_id}</span>
+            language_filter_pills_html += f"""
+            <button class="filter-pill" onclick="filterLanguage('{lang_slug}', this)">
+                {lang_name_esc} ({count})
+            </button>
+            """
+
+            group_cards_html = ""
+            for fd in lang_files:
+                rel_p = html.escape(fd["file_path"])
+                file_slug = "".join(c if c.isalnum() or c in "-_" else "_" for c in fd["file_path"].lower())
+                file_anchor_id = f"file-{file_slug}"
+                lang = html.escape(fd["language"])
+                role = html.escape(fd["role"])
+                purpose = html.escape(fd["purpose"])
+                impact_level = fd["impact_risk_level"]
+                batch_id = html.escape(fd["batch_id"])
+
+                risk_class = (
+                    "badge-danger"
+                    if impact_level == "HIGH"
+                    else "badge-warning"
+                    if impact_level == "MEDIUM"
+                    else "badge-success"
+                )
+
+                symbols_html = ""
+                for s in fd["symbols"]:
+                    stype = s.get("symbol_type")
+                    if stype == "import":
+                        continue
+                    sname = html.escape(s.get("name", ""))
+                    doc_raw = s.get("docstring") or ""
+                    doc = html.escape(doc_raw.strip())
+                    doc_str = f" — <span class='doc-text'>{doc}</span>" if doc else ""
+                    symbols_html += f'<li class="sym-item"><span class="sym-type">{stype}</span> <code>{sname}</code>{doc_str}</li>'
+
+                if not symbols_html:
+                    symbols_html = '<li class="text-muted">No top-level functions or classes declared</li>'
+
+                ws_deps_str = ", ".join([html.escape(d) for d in fd["workspace_dependencies"]]) if fd["workspace_dependencies"] else "None"
+                used_by_str = ", ".join([html.escape(u) for u in fd["used_by"]]) if fd["used_by"] else "None"
+                cls_cnt = len([s for s in fd.get("symbols", []) if s.get("symbol_type") == "class"])
+                func_cnt = len([s for s in fd.get("symbols", []) if s.get("symbol_type") in ("function", "method")])
+                total_sym_cnt = len(fd.get("symbols", []))
+
+                file_narrative_text = (
+                    f"The file <code>{rel_p}</code> fulfills the architectural role of <strong>{role}</strong>. "
+                    f"{purpose} Declares {cls_cnt} class(es) and {func_cnt} function(s). "
+                    f"Imports <em>{ws_deps_str}</em> and is imported by <em>{used_by_str}</em>. "
+                    f"Evaluated change impact risk: <strong>{impact_level}</strong>."
+                )
+
+                group_cards_html += f"""
+                <div class="card file-card" id="{file_anchor_id}" data-filepath="{rel_p.lower()}" data-language="{lang_slug}" data-batch="{batch_id}">
+                    <div class="file-card-header">
+                        <div>
+                            <a href="#{file_anchor_id}" class="anchor-link" title="Direct link to {rel_p}">#</a>
+                            <span class="file-title">{rel_p}</span>
+                            <span class="badge badge-info">{lang}</span>
+                            <span class="badge badge-outline">{batch_id}</span>
+                        </div>
+                        <span class="badge {risk_class}">Impact: {impact_level}</span>
                     </div>
-                    <span class="badge {risk_class}">Impact: {impact_level}</span>
-                </div>
-                <p class="narrative-text" style="font-size:0.9rem; margin-top: 0.4rem; margin-bottom: 0.5rem;">{file_narrative_text}</p>
+                    <p class="narrative-text" style="font-size:0.9rem; margin-top: 0.4rem; margin-bottom: 0.5rem;">{file_narrative_text}</p>
 
-                <details class="file-details">
-                    <summary>View Declared Symbols ({total_sym_cnt}) & Dependencies</summary>
-                    <div class="details-content">
-                        <ul class="sym-list">
-                            {symbols_html}
-                        </ul>
-                        <div class="grid-2" style="font-size:0.85rem;">
-                            <div>
-                                <strong>Depends On:</strong> {ws_deps_str}
-                            </div>
-                            <div>
-                                <strong>Used By:</strong> {used_by_str}
+                    <details class="file-details">
+                        <summary>View Declared Symbols ({total_sym_cnt}) & Dependencies</summary>
+                        <div class="details-content">
+                            <ul class="sym-list">
+                                {symbols_html}
+                            </ul>
+                            <div class="grid-2" style="font-size:0.85rem;">
+                                <div>
+                                    <strong>Depends On:</strong> {ws_deps_str}
+                                </div>
+                                <div>
+                                    <strong>Used By:</strong> {used_by_str}
+                                </div>
                             </div>
                         </div>
+                    </details>
+                </div>
+                """
+
+            grouped_files_html += f"""
+            <div class="language-section" id="{lang_id}" data-language-group="{lang_slug}">
+                <div class="language-section-header">
+                    <div style="display:flex; align-items:center; gap:0.6rem;">
+                        <a href="#{lang_id}" class="anchor-link" style="font-size:1.2rem;" title="Direct link to {lang_name_esc} files">#</a>
+                        <h3 style="margin:0; font-size:1.2rem; color:var(--text-color);">{lang_name_esc} Files</h3>
+                        <span class="badge badge-info">{count} File{'s' if count != 1 else ''}</span>
                     </div>
-                </details>
+                    <button class="toggle-btn" onclick="toggleLanguageDetails('{lang_id}')">Toggle All Details</button>
+                </div>
+                <div class="language-file-list">
+                    {group_cards_html}
+                </div>
             </div>
             """
 
@@ -302,7 +365,8 @@ class ReportGenerator:
         lang_items_html = ""
         for lang, count in index.languages.items():
             lang_esc = html.escape(lang)
-            lang_items_html += f'<span class="badge badge-outline">{lang_esc}: {count} files</span> '
+            lang_slug = "".join(c if c.isalnum() or c in "-_" else "_" for c in lang.lower())
+            lang_items_html += f'<a href="#lang-{lang_slug}" class="badge badge-outline" style="text-decoration:none;">{lang_esc}: {count} files</a> '
         if not lang_items_html:
             lang_items_html = '<span class="text-muted">No language data</span>'
 
@@ -325,7 +389,7 @@ class ReportGenerator:
         if security_findings:
             security_section_html = f"""
             <section id="security">
-                <h2 class="section-heading">Security Intelligence ({len(security_findings)} Findings)</h2>
+                <h2 class="section-heading"><a href="#security" class="anchor-link">#</a> Security Intelligence ({len(security_findings)} Findings)</h2>
                 <div class="card">
                     <table>
                         <thead>
@@ -356,7 +420,7 @@ class ReportGenerator:
                 """
             deps_section_html = f"""
             <section id="dependencies">
-                <h2 class="section-heading">Manifest Dependencies ({len(deps)})</h2>
+                <h2 class="section-heading"><a href="#dependencies" class="anchor-link">#</a> Manifest Dependencies ({len(deps)})</h2>
                 <div class="card">
                     <table>
                         <thead>
@@ -396,6 +460,7 @@ class ReportGenerator:
             --text-color: #f9fafb;
             --muted-color: #9ca3af;
             --accent-color: #38bdf8;
+            --accent-glow: rgba(56, 189, 248, 0.25);
             --border-color: #374151;
             --danger-color: #f43f5e;
             --warning-color: #fbbf24;
@@ -403,6 +468,7 @@ class ReportGenerator:
             --code-bg: #111827;
         }}
         * {{ box-sizing: border-box; }}
+        html {{ scroll-behavior: smooth; }}
         body {{
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
             background-color: var(--bg-color);
@@ -415,7 +481,7 @@ class ReportGenerator:
         }}
         /* Sidebar */
         aside {{
-            width: 250px;
+            width: 270px;
             background-color: var(--sidebar-bg);
             border-right: 1px solid var(--border-color);
             display: flex;
@@ -446,7 +512,9 @@ class ReportGenerator:
             text-decoration: none;
             padding: 0.6rem 0.8rem;
             border-radius: 0.5rem;
-            display: block;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
             font-size: 0.88rem;
             font-weight: 500;
             transition: all 0.15s ease;
@@ -455,6 +523,30 @@ class ReportGenerator:
             background-color: rgba(56, 189, 248, 0.12);
             color: var(--accent-color);
         }}
+        .nav-sub-menu {{
+            list-style: none;
+            padding: 0.2rem 0 0.4rem 1rem;
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 0.2rem;
+        }}
+        .nav-sub-item a {{
+            color: var(--muted-color);
+            text-decoration: none;
+            padding: 0.35rem 0.6rem;
+            border-radius: 0.375rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 0.8rem;
+            transition: all 0.15s ease;
+        }}
+        .nav-sub-item a:hover {{
+            background-color: rgba(56, 189, 248, 0.08);
+            color: var(--accent-color);
+        }}
+        .sub-bullet {{ margin-right: 0.35rem; color: var(--accent-color); font-size: 0.9rem; }}
 
         /* Main Content */
         main {{
@@ -472,6 +564,27 @@ class ReportGenerator:
         }}
         h1 {{ margin: 0; color: var(--text-color); font-size: 1.75rem; }}
         .header-meta {{ color: var(--muted-color); font-size: 0.85rem; margin-top: 0.3rem; }}
+
+        /* Anchor Links */
+        .anchor-link {{
+            color: var(--muted-color);
+            text-decoration: none;
+            font-size: 0.85em;
+            margin-right: 0.35rem;
+            opacity: 0.4;
+            transition: opacity 0.2s ease, color 0.2s ease;
+        }}
+        .anchor-link:hover {{
+            opacity: 1.0;
+            color: var(--accent-color);
+        }}
+        :target {{
+            animation: highlight-pulse 2s ease-out;
+        }}
+        @keyframes highlight-pulse {{
+            0% {{ background-color: rgba(56, 189, 248, 0.2); outline: 2px solid var(--accent-color); }}
+            100% {{ background-color: var(--card-bg); outline: none; }}
+        }}
 
         /* Prose & Narratives */
         .narrative-card {{
@@ -496,6 +609,45 @@ class ReportGenerator:
         }}
         .narrative-text:last-child {{ margin-bottom: 0; }}
 
+        /* Installation Commands Guide */
+        .install-card {{
+            background: linear-gradient(145deg, #162032, #1f2937);
+            border: 1px solid rgba(56, 189, 248, 0.3);
+            border-left: 4px solid var(--accent-color);
+            border-radius: 0.75rem;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }}
+        .cmd-box {{
+            background-color: var(--code-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 0.5rem;
+            padding: 0.75rem 1rem;
+            margin-bottom: 0.75rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-family: "JetBrains Mono", Consolas, "Courier New", monospace;
+            font-size: 0.88rem;
+        }}
+        .cmd-text {{ color: #38bdf8; }}
+        .cmd-desc {{ color: var(--muted-color); font-size: 0.8rem; margin-bottom: 0.3rem; }}
+        .copy-btn {{
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid var(--border-color);
+            color: var(--text-color);
+            padding: 0.3rem 0.6rem;
+            border-radius: 0.375rem;
+            font-size: 0.75rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }}
+        .copy-btn:hover {{
+            background: var(--accent-color);
+            color: #0b0f19;
+            font-weight: bold;
+        }}
+
         .batch-card {{
             border-left: 4px solid var(--success-color);
             margin-bottom: 0.85rem;
@@ -516,13 +668,66 @@ class ReportGenerator:
         .badge-info {{ background-color: rgba(56, 189, 248, 0.15); color: var(--accent-color); border: 1px solid rgba(56, 189, 248, 0.3); }}
         .badge-outline {{ border: 1px solid var(--border-color); color: var(--muted-color); }}
 
+        /* Language Sections */
+        .language-section {{
+            margin-bottom: 2rem;
+            padding-top: 0.5rem;
+        }}
+        .language-section-header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 2px solid var(--border-color);
+            padding-bottom: 0.6rem;
+            margin-bottom: 1rem;
+        }}
+        .toggle-btn {{
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid var(--border-color);
+            color: var(--muted-color);
+            padding: 0.35rem 0.75rem;
+            border-radius: 0.375rem;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }}
+        .toggle-btn:hover {{
+            background: rgba(56, 189, 248, 0.15);
+            color: var(--accent-color);
+        }}
+
+        /* Filter Pills */
+        .filter-pills-container {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+        }}
+        .filter-pill {{
+            background: var(--sidebar-bg);
+            border: 1px solid var(--border-color);
+            color: var(--muted-color);
+            padding: 0.4rem 0.85rem;
+            border-radius: 2rem;
+            font-size: 0.82rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }}
+        .filter-pill:hover, .filter-pill.active {{
+            background: var(--accent-color);
+            color: #0b0f19;
+            font-weight: 600;
+            border-color: var(--accent-color);
+        }}
+
         /* Tables */
         table {{ width: 100%; border-collapse: collapse; margin-top: 0.5rem; text-align: left; font-size: 0.88rem; }}
         th {{ background-color: rgba(0, 0, 0, 0.2); padding: 0.65rem; border-bottom: 1px solid var(--border-color); color: var(--muted-color); font-weight: 600; }}
         td {{ padding: 0.65rem; border-bottom: 1px solid var(--border-color); }}
 
         /* File Card Details */
-        .file-card {{ border-left: 3px solid var(--border-color); margin-bottom: 0.85rem; }}
+        .file-card {{ border-left: 3px solid var(--border-color); margin-bottom: 0.85rem; transition: border-color 0.2s ease; }}
+        .file-card:hover {{ border-left-color: var(--accent-color); }}
         .file-card-header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem; }}
         .file-title {{ font-weight: 600; font-family: monospace; font-size: 0.92rem; color: var(--accent-color); margin-right: 0.5rem; }}
         .file-details summary {{ cursor: pointer; font-size: 0.8rem; color: var(--accent-color); font-weight: 500; }}
@@ -537,11 +742,11 @@ class ReportGenerator:
         .progress-bar-fill {{ height: 100%; background-color: var(--accent-color); transition: width 0.3s ease; }}
 
         /* Search Box */
-        .search-container {{ margin-bottom: 1.25rem; }}
+        .search-container {{ margin-bottom: 1rem; }}
         .search-input {{ width: 100%; padding: 0.7rem 1rem; border-radius: 0.5rem; border: 1px solid var(--border-color); background-color: var(--sidebar-bg); color: var(--text-color); font-size: 0.9rem; }}
         .search-input:focus {{ outline: 2px solid var(--accent-color); }}
 
-        .section-heading {{ font-size: 1.25rem; font-weight: bold; margin: 1.75rem 0 1rem 0; color: var(--text-color); border-left: 4px solid var(--accent-color); padding-left: 0.6rem; }}
+        .section-heading {{ font-size: 1.25rem; font-weight: bold; margin: 1.75rem 0 1rem 0; color: var(--text-color); border-left: 4px solid var(--accent-color); padding-left: 0.6rem; display: flex; align-items: center; }}
         code {{ background-color: var(--code-bg); padding: 0.15rem 0.35rem; border-radius: 0.25rem; font-family: monospace; font-size: 0.85em; }}
         .text-muted {{ color: var(--muted-color); }}
     </style>
@@ -553,9 +758,15 @@ class ReportGenerator:
         </div>
         <ul class="nav-menu">
             <li class="nav-item"><a href="#executive-overview" class="active">Executive Overview</a></li>
+            <li class="nav-item"><a href="#installation">Installation & Commands</a></li>
             <li class="nav-item"><a href="#components">System Architecture</a></li>
             <li class="nav-item"><a href="#batch-narratives">Batch Analysis Log ({len(batches)})</a></li>
-            <li class="nav-item"><a href="#file-narratives">File Intelligence ({len(files_data)})</a></li>
+            <li class="nav-item">
+                <a href="#file-narratives">File Intelligence ({len(files_data)})</a>
+            </li>
+            <ul class="nav-sub-menu">
+                {language_nav_items_html}
+            </ul>
             {f'<li class="nav-item"><a href="#security">Security ({len(security_findings)})</a></li>' if security_findings else ''}
             {f'<li class="nav-item"><a href="#dependencies">Dependencies ({len(deps)})</a></li>' if deps else ''}
         </ul>
@@ -577,7 +788,7 @@ class ReportGenerator:
         <!-- Executive Project Overview -->
         <section id="executive-overview">
             <div class="narrative-card">
-                <h2>Executive Repository Summary</h2>
+                <h2><a href="#executive-overview" class="anchor-link">#</a> Executive Repository Summary</h2>
                 <p class="narrative-text">{project_narrative_p1}</p>
                 <p class="narrative-text">{project_narrative_p2}</p>
                 <p class="narrative-text">{project_narrative_p3}</p>
@@ -608,9 +819,61 @@ class ReportGenerator:
             </div>
         </section>
 
+        <!-- Installation & Usage Guide -->
+        <section id="installation">
+            <h2 class="section-heading"><a href="#installation" class="anchor-link">#</a> Installation & CLI Usage Commands</h2>
+            <div class="install-card">
+                <p class="narrative-text" style="margin-top:0;">
+                    Follow these commands to install, index, query, and run intelligence workflows on this workspace:
+                </p>
+
+                <div class="cmd-desc">1. Install WIA CLI toolchain (Editable Mode or Pip):</div>
+                <div class="cmd-box">
+                    <span class="cmd-text">pip install -e .</span>
+                    <button class="copy-btn" onclick="copyFromBox(this)">Copy</button>
+                </div>
+
+                <div class="cmd-desc">2. Initialize and perform full workspace indexation:</div>
+                <div class="cmd-box">
+                    <span class="cmd-text">wia init && wia index</span>
+                    <button class="copy-btn" onclick="copyFromBox(this)">Copy</button>
+                </div>
+
+                <div class="cmd-desc">3. Check workspace indexing status, batch health, and cache statistics:</div>
+                <div class="cmd-box">
+                    <span class="cmd-text">wia status</span>
+                    <button class="copy-btn" onclick="copyFromBox(this)">Copy</button>
+                </div>
+
+                <div class="cmd-desc">4. Query codebase intelligence and retrieve grounded evidence:</div>
+                <div class="cmd-box">
+                    <span class="cmd-text">wia ask "Explain the system architecture, entrypoints, and data flow"</span>
+                    <button class="copy-btn" onclick="copyFromBox(this)">Copy</button>
+                </div>
+
+                <div class="cmd-desc">5. Perform Blast-Radius / Impact Analysis before modifying a file:</div>
+                <div class="cmd-box">
+                    <span class="cmd-text">wia impact wia/core/retrieval.py</span>
+                    <button class="copy-btn" onclick="copyFromBox(this)">Copy</button>
+                </div>
+
+                <div class="cmd-desc">6. Regenerate standalone interactive HTML report:</div>
+                <div class="cmd-box">
+                    <span class="cmd-text">wia report --output wia-report.html</span>
+                    <button class="copy-btn" onclick="copyFromBox(this)">Copy</button>
+                </div>
+
+                <div class="cmd-desc">7. Launch backend FastAPI server / REST intelligence API:</div>
+                <div class="cmd-box">
+                    <span class="cmd-text">uvicorn backend.app.main:app --reload --port 8000</span>
+                    <button class="copy-btn" onclick="copyFromBox(this)">Copy</button>
+                </div>
+            </div>
+        </section>
+
         <!-- Component Architecture Breakdown -->
         <section id="components">
-            <h2 class="section-heading">System Component Architecture</h2>
+            <h2 class="section-heading"><a href="#components" class="anchor-link">#</a> System Component Architecture</h2>
             <div class="grid-2">
                 {components_html}
             </div>
@@ -618,7 +881,7 @@ class ReportGenerator:
 
         <!-- Accumulated Batch Intelligence Log -->
         <section id="batch-narratives">
-            <h2 class="section-heading">Accumulated Batch Analysis Log ({len(batches)} Batches)</h2>
+            <h2 class="section-heading"><a href="#batch-narratives" class="anchor-link">#</a> Accumulated Batch Analysis Log ({len(batches)} Batches)</h2>
             <div class="card" style="margin-bottom: 1.25rem;">
                 <div style="display:flex; justify-content:space-between; align-items:center;">
                     <span>Accumulated Batch Progress ({len(completed_batches)} of {len(batches)} Batches Completed)</span>
@@ -642,12 +905,19 @@ class ReportGenerator:
 
         <!-- File-by-File Technical Intelligence Narratives -->
         <section id="file-narratives">
-            <h2 class="section-heading">File-by-File Codebase Intelligence ({len(files_data)} Files)</h2>
+            <h2 class="section-heading"><a href="#file-narratives" class="anchor-link">#</a> File-by-File Codebase Intelligence ({len(files_data)} Files)</h2>
+            
             <div class="search-container">
                 <input type="text" id="fileSearch" class="search-input" placeholder="Search repository files, symbols, modules, architectural roles..." onkeyup="filterFiles()">
             </div>
+
+            <!-- Language Quick Filter Tabs -->
+            <div class="filter-pills-container">
+                {language_filter_pills_html}
+            </div>
+
             <div id="fileList">
-                {files_cards_html}
+                {grouped_files_html}
             </div>
         </section>
 
@@ -661,17 +931,81 @@ class ReportGenerator:
     <script>
         window.WIA_REPORT_DATA = {report_json_data};
 
+        function copyFromBox(btn) {{
+            const box = btn.closest('.cmd-box');
+            if (!box) return;
+            const textEl = box.querySelector('.cmd-text');
+            const text = textEl ? textEl.innerText.trim() : '';
+            if (!text) return;
+
+            navigator.clipboard.writeText(text).then(() => {{
+                const originalText = btn.innerText;
+                btn.innerText = 'Copied!';
+                btn.style.background = '#34d399';
+                btn.style.color = '#0b0f19';
+                setTimeout(() => {{
+                    btn.innerText = originalText;
+                    btn.style.background = '';
+                    btn.style.color = '';
+                }}, 2000);
+            }}).catch(() => {{
+                const el = document.createElement('textarea');
+                el.value = text;
+                document.body.appendChild(el);
+                el.select();
+                document.execCommand('copy');
+                document.body.removeChild(el);
+                btn.innerText = 'Copied!';
+                setTimeout(() => {{ btn.innerText = 'Copy'; }}, 2000);
+            }});
+        }}
+
+        function filterLanguage(langSlug, btn) {{
+            // Update active pill
+            document.querySelectorAll('.filter-pill').forEach(p => p.classList.remove('active'));
+            if (btn) btn.classList.add('active');
+
+            const sections = document.querySelectorAll('.language-section');
+            if (langSlug === 'all') {{
+                sections.forEach(s => s.style.display = 'block');
+            }} else {{
+                sections.forEach(s => {{
+                    if (s.getAttribute('data-language-group') === langSlug) {{
+                        s.style.display = 'block';
+                    }} else {{
+                        s.style.display = 'none';
+                    }}
+                }});
+            }}
+        }}
+
+        function toggleLanguageDetails(langSectionId) {{
+            const sec = document.getElementById(langSectionId);
+            if (!sec) return;
+            const detailsList = sec.querySelectorAll('details');
+            if (!detailsList.length) return;
+            const anyClosed = Array.from(detailsList).some(d => !d.open);
+            detailsList.forEach(d => d.open = anyClosed);
+        }}
+
         function filterFiles() {{
             const input = document.getElementById('fileSearch').value.toLowerCase();
             const cards = document.querySelectorAll('.file-card');
             cards.forEach(card => {{
-                const path = card.getAttribute('data-filepath');
+                const path = card.getAttribute('data-filepath') || '';
                 const text = card.innerText.toLowerCase();
                 if (path.includes(input) || text.includes(input)) {{
                     card.style.display = 'block';
                 }} else {{
                     card.style.display = 'none';
                 }}
+            }});
+
+            // Hide empty language sections when searching
+            document.querySelectorAll('.language-section').forEach(sec => {{
+                const visibleCards = sec.querySelectorAll('.file-card[style*="display: block"], .file-card:not([style*="display: none"])');
+                const hasVisible = Array.from(sec.querySelectorAll('.file-card')).some(c => c.style.display !== 'none');
+                sec.style.display = hasVisible ? 'block' : 'none';
             }});
         }}
 
