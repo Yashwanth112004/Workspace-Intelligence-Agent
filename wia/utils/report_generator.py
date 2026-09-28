@@ -236,7 +236,10 @@ class ReportGenerator:
 
         # Build File Intelligence Cards HTML Grouped by Language with Anchors
         language_nav_items_html = ""
-        language_select_options_html = f'<option value="all">🌐 All Languages ({len(files_data)} files)</option>\n'
+        language_select_options_html = (
+            f'                    <option value="" selected disabled>-- Select a Language to View Files --</option>\n'
+            f'                    <option value="all">🌐 All Languages ({len(files_data)} files)</option>\n'
+        )
         grouped_files_html = ""
 
         for lang_name, lang_files in sorted_lang_groups:
@@ -338,7 +341,7 @@ class ReportGenerator:
                 """
 
             grouped_files_html += f"""
-            <div class="language-section" id="{lang_id}" data-language-group="{lang_slug}">
+            <div class="language-section" id="{lang_id}" data-language-group="{lang_slug}" style="display:none;">
                 <div class="language-section-header">
                     <div style="display:flex; align-items:center; gap:0.6rem;">
                         <a href="#{lang_id}" class="anchor-link" style="font-size:1.2rem;" title="Direct link to {lang_name_esc} files">#</a>
@@ -939,6 +942,13 @@ class ReportGenerator:
             </div>
 
             <div id="fileList">
+                <div id="noLangPlaceholder" class="card" style="text-align:center; padding:3.5rem 1.5rem; color:var(--muted-color); border:1px dashed var(--border-color); margin-top:0.5rem; background:rgba(31, 41, 55, 0.4);">
+                    <div style="font-size:2.8rem; margin-bottom:0.75rem;">📂</div>
+                    <h3 style="margin:0 0 0.5rem 0; color:var(--text-color); font-size:1.15rem;">Select a Language to View Files</h3>
+                    <p style="margin:0 auto; font-size:0.9rem; max-width:480px; line-height:1.5;">
+                        Choose a programming language from the dropdown selector above to inspect its indexed source files, declared AST symbols, and dependency relationships.
+                    </p>
+                </div>
                 {grouped_files_html}
             </div>
         </section>
@@ -988,7 +998,17 @@ class ReportGenerator:
                 selectEl.value = langSlug;
             }}
 
+            const placeholder = document.getElementById('noLangPlaceholder');
             const sections = document.querySelectorAll('.language-section');
+
+            if (!langSlug) {{
+                if (placeholder) placeholder.style.display = 'block';
+                sections.forEach(s => s.style.display = 'none');
+                return;
+            }}
+
+            if (placeholder) placeholder.style.display = 'none';
+
             if (langSlug === 'all') {{
                 sections.forEach(s => s.style.display = 'block');
             }} else {{
@@ -1013,8 +1033,19 @@ class ReportGenerator:
         }}
 
         function filterFiles() {{
-            const input = document.getElementById('fileSearch').value.toLowerCase();
-            const currentLang = document.getElementById('languageSelect') ? document.getElementById('languageSelect').value : 'all';
+            const input = document.getElementById('fileSearch').value.toLowerCase().trim();
+            const selectEl = document.getElementById('languageSelect');
+            let currentLang = selectEl ? selectEl.value : '';
+            const placeholder = document.getElementById('noLangPlaceholder');
+
+            if (input && !currentLang) {{
+                currentLang = 'all';
+                if (placeholder) placeholder.style.display = 'none';
+            }} else if (!input && !currentLang) {{
+                if (placeholder) placeholder.style.display = 'block';
+                document.querySelectorAll('.language-section').forEach(s => s.style.display = 'none');
+                return;
+            }}
 
             const cards = document.querySelectorAll('.file-card');
             cards.forEach(card => {{
