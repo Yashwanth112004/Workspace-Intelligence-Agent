@@ -3,7 +3,7 @@
   "displayName": "Workspace Intelligence Agent (WIA)",
   "description": "AI-Powered Code Intelligence, Architecture Map, Symbol Impact CodeLens, and Laya Decision Agent for VS Code",
   "version": "0.1.1",
-  "publisher": "wia-agent",
+  "publisher": "yashwanth112004",
   "engines": {
     "vscode": "^1.80.0"
   },
