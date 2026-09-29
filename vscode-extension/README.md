@@ -1,8 +1,8 @@
 # 🧠 Workspace Intelligence Agent (WIA) — VS Code & Antigravity IDE Extension
 
-[![VS Code Extension](https://img.shields.io/badge/VS%20Code-v0.1.7-007ACC.svg?logo=visualstudiocode)](https://marketplace.visualstudio.com/)
+[![VS Code Extension](https://img.shields.io/badge/VS%20Code-v0.1.1-007ACC.svg?logo=visualstudiocode)](https://marketplace.visualstudio.com/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](../LICENSE)
-[![Tests](https://img.shields.io/badge/Tests-77%20Passed-brightgreen.svg)](#-automated-testing)
+[![Tests](https://img.shields.io/badge/Tests-82%20Passed-brightgreen.svg)](#-automated-testing)
 
 **WIA for Visual Studio Code & Antigravity IDE** is an AI-powered code intelligence companion providing in-editor symbol impact CodeLens, interactive sidebar agent chat, live subsystem architecture visualizers, and grounded AI reasoning over your entire repository.
 
@@ -18,7 +18,7 @@
 - **Content Security Policy (CSP)**: Fully compliant and sandboxed for fast, reliable interaction.
 
 ### 2. 🔍 In-Editor Symbol Impact & Flow CodeLens
-- Automatically analyzes classes, functions, and methods across **Python, TypeScript, JavaScript, Go, and Rust**.
+- Automatically analyzes classes, functions, and methods across **Python, TypeScript, JavaScript, Go, Rust, Java, C#, C++**.
 - Inline clickable CodeLens indicators:
   - `⚡ WIA Impact (<symbol>)`: Calculates direct callers, importing modules, and refactoring risk classification (`LOW`, `MEDIUM`, `HIGH`).
   - `🔍 Trace Flow`: Traces execution call chains starting from that function.
@@ -98,17 +98,17 @@ Configure extension settings via `settings.json` or the VS Code Settings UI:
 
 ## 🧪 Automated Testing
 
-The extension includes 77 automated unit tests covering JEV routing, health models, and execution pipelines:
+The extension includes 82 automated unit tests covering JEV routing, health models, and execution pipelines:
 
 ```bash
 # Compile TypeScript
 npm run compile
 
-# Run all 77 automated extension tests
+# Run all 82 automated extension tests
 npm test
 
 # Package VSIX distribution
-npm run package
+npx @vscode/vsce package
 ```
 
 ---
