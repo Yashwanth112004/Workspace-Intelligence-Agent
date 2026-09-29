@@ -24,6 +24,7 @@ Module.prototype.require = function (request) {
 const jevRouting_test_1 = require("./jevRouting.test");
 const healthModel_test_1 = require("./healthModel.test");
 const agentExecution_test_1 = require("./agentExecution.test");
+const responseFormatter_test_1 = require("./responseFormatter.test");
 function runAll() {
     console.log('========================================');
     console.log(' running WIA Extension Test Suites');
@@ -39,8 +40,12 @@ function runAll() {
     const agent = (0, agentExecution_test_1.runAgentExecutionTests)();
     for (const r of agent.results)
         console.log(r);
-    const totalPassed = jev.passed + health.passed + agent.passed;
-    const totalFailed = jev.failed + health.failed + agent.failed;
+    console.log('\n--- Response Formatter Tests ---');
+    const formatter = (0, responseFormatter_test_1.runResponseFormatterTests)();
+    for (const r of formatter.results)
+        console.log(r);
+    const totalPassed = jev.passed + health.passed + agent.passed + formatter.passed;
+    const totalFailed = jev.failed + health.failed + agent.failed + formatter.failed;
     console.log('\n========================================');
     console.log(` ALL TESTS COMPLETED: ${totalPassed} Passed, ${totalFailed} Failed`);
     console.log('========================================');

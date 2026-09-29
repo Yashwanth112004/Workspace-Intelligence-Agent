@@ -1,5 +1,6 @@
 """WIA CLI `impact` command for evaluating symbol refactoring impact."""
 
+import json
 from pathlib import Path
 import click
 from wia.cli.formatting import format_error, format_header, format_kv, format_warning
@@ -15,13 +16,16 @@ from wia.storage.repository import IndexRepository
     type=click.Path(exists=True, file_okay=False, dir_okay=True),
     help="Path to workspace directory.",
 )
-def impact_cmd(symbol: str, workspace: str | None) -> None:
+@click.option("--json", "json_output", is_flag=True, default=False, help="Output report as JSON.")
+def impact_cmd(symbol: str, workspace: str | None, json_output: bool = False) -> None:
     """Analyze downstream dependency impact of modifying target symbol."""
     path = Path(workspace).resolve() if workspace else Path.cwd().resolve()
-    click.echo(format_header(f"Impact Analysis for '{symbol}'"))
 
     index = IndexRepository.load_index(path)
     if not index:
+        if json_output:
+            click.echo(json.dumps({"error": f"No WIA index found at '{path}'."}))
+            return
         click.echo(
             format_error(
                 f"No WIA index found at '{path}'. Run 'wia index' first before running impact analysis."
@@ -30,6 +34,12 @@ def impact_cmd(symbol: str, workspace: str | None) -> None:
         return
 
     report = ImpactAnalyzer.analyze_symbol_impact(symbol, index)
+
+    if json_output:
+        click.echo(json.dumps(report.to_dict(), indent=2))
+        return
+
+    click.echo(format_header(f"Impact Analysis for '{symbol}'"))
 
     if not report.found:
         click.echo(format_error(f"Symbol '{symbol}' was not found in the indexed workspace."))
@@ -52,11 +62,11 @@ def impact_cmd(symbol: str, workspace: str | None) -> None:
             click.echo(f"  * {cand}")
 
     if report.direct_dependents:
-        click.echo("\n" + format_header("Direct Symbol Callers"))
+        click.echo("\n" + format_header(f"Direct Symbol Callers ({len(report.direct_dependents)})"))
         for dep in report.direct_dependents:
             click.echo(f"  * {dep}")
 
-    if report.file_dependents:
+    if report.file_dependents and report.target_type == "file":
         click.echo("\n" + format_header(f"File-Level Dependents ({len(report.file_dependents)} modules import defining file)"))
         for fdep in report.file_dependents[:10]:
             click.echo(f"  * {fdep}")

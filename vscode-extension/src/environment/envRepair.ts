@@ -51,7 +51,8 @@ export class EnvironmentRepairEngine {
         if (fs.existsSync(path.join(workspaceRoot, 'pyproject.toml')) || fs.existsSync(path.join(workspaceRoot, 'requirements.txt'))) {
             const hasVenv = fs.existsSync(path.join(workspaceRoot, '.venv')) ||
                             fs.existsSync(path.join(workspaceRoot, 'venv')) ||
-                            fs.existsSync(path.join(workspaceRoot, 'env'));
+                            fs.existsSync(path.join(workspaceRoot, 'env')) ||
+                            fs.existsSync(path.join(workspaceRoot, 'Workspace-Intelligence-Agent', '.venv'));
 
             return {
                 ecosystem: 'python',

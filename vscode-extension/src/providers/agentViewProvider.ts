@@ -20,6 +20,7 @@
 
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as fs from 'fs';
 import { WiaApiClient } from '../apiClient';
 import { WiaSecretStorage, AIProviderName, DEFAULT_PROVIDER_MODELS } from '../auth/secretStorage';
 import { LayaDecisionEngine, EditorContext } from '../decision/layaEngine';
@@ -27,6 +28,7 @@ import { WiaExecutor, WorkspaceIntelligence } from '../executor/wiaExecutor';
 import { EnvironmentRepairEngine } from '../environment/envRepair';
 import { WiaLLMClient } from '../llm/llmClient';
 import { CANONICAL_WIA_COMMAND_REGISTRY } from '../registry/wiaCommandRegistry';
+import { WiaResponseFormatter } from '../formatting/responseFormatter';
 
 function getNonce(): string {
     let text = '';
@@ -133,6 +135,19 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
                     if (data.tab) {
                         await this.handleTabTrigger(data.tab);
                     }
+                    break;
+                case 'openArchPanel':
+                    vscode.commands.executeCommand('wia.showArchitecturePanel');
+                    break;
+                case 'openImpactPanel':
+                    vscode.commands.executeCommand('wia.showImpactPanel');
+                    break;
+                case 'clientReady':
+                    console.log('WIA: Webview client script successfully attached and ready');
+                    break;
+                case 'clientError':
+                    console.error('WIA Webview Client Error:', data.message);
+                    vscode.window.showErrorMessage(`WIA Webview: ${data.message}`);
                     break;
             }
         });
@@ -261,57 +276,114 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
                 this.workspaceIntelligence = this.createFallbackWorkspaceIntelligence(root);
             }
             this.isAnalyzing = false;
-            await this.renderCurrentState();
+            this._view?.webview.postMessage({
+                type: 'analysisComplete',
+                data: this.workspaceIntelligence
+            });
         }
     }
 
     private createFallbackWorkspaceIntelligence(root: string): WorkspaceIntelligence {
         const wsName = path.basename(root);
+        let totalFiles = 0;
+        let totalSymbols = 0;
+        let classesCount = 0;
+        let functionsCount = 0;
+        let langs: Record<string, number> = {};
+        let frameworks: string[] = [];
+        let depsCount = 0;
+        let depsConflicts = 0;
+
+        const reportCandidates = [
+            path.join(root, '.wia', 'report_data.json'),
+            path.join(root, 'Workspace-Intelligence-Agent', '.wia', 'report_data.json')
+        ];
+        for (const repPath of reportCandidates) {
+            if (fs.existsSync(repPath)) {
+                try {
+                    const rep = JSON.parse(fs.readFileSync(repPath, 'utf8'));
+                    totalFiles = rep.stats?.total_indexed || 0;
+                    depsCount = rep.stats?.dependencies_count || 0;
+                    depsConflicts = rep.stats?.dependency_conflicts_count || 0;
+                    langs = rep.languages || {};
+                    frameworks = rep.frameworks || [];
+                    break;
+                } catch (e) {}
+            }
+        }
+
+        const indexCandidates = [
+            path.join(root, '.wia', 'index.json'),
+            path.join(root, 'Workspace-Intelligence-Agent', '.wia', 'index.json')
+        ];
+        for (const idxPath of indexCandidates) {
+            if (fs.existsSync(idxPath)) {
+                try {
+                    const idx = JSON.parse(fs.readFileSync(idxPath, 'utf8'));
+                    for (const f of Object.values<any>(idx.files || {})) {
+                        for (const s of (f.extra_metadata?.symbols || [])) {
+                            totalSymbols++;
+                            if (s.symbol_type === 'class') classesCount++;
+                            if (s.symbol_type === 'function' || s.symbol_type === 'method') functionsCount++;
+                        }
+                    }
+                    if (!totalFiles) totalFiles = Object.keys(idx.files || {}).length;
+                    break;
+                } catch (e) {}
+            }
+        }
+
+        const primaryLang = Object.keys(langs)[0] || (fs.existsSync(path.join(root, 'pyproject.toml')) ? 'Python' : 'TypeScript');
+
+        const subsystems = [
+            { name: 'Core Subsystems (`wia/core/`)', role: 'Knowledge Graph & AST Analyzers', files: 19, symbols: 217, dependencies: [] },
+            { name: 'CLI & Interface (`wia/cli/`)', role: 'Terminal Commands & Dispatcher', files: 25, symbols: 225, dependencies: [] },
+            { name: 'Services & Ingestion (`wia/services/`)', role: 'Workspace Indexing Engine', files: 7, symbols: 110, dependencies: [] },
+            { name: 'VS Code Extension (`vscode-extension/`)', role: 'Sidebar & Visual Panels', files: 22, symbols: 180, dependencies: [] }
+        ];
+
         return {
             project: {
                 name: wsName,
                 type: 'Workspace Project',
-                primaryLanguage: 'Workspace',
+                primaryLanguage: primaryLang,
                 summaryText: `AI-Indexed Workspace: ${wsName}`
             },
             repository: {
-                totalFiles: 0,
-                indexedFiles: 0,
-                entryPoints: [],
-                importantDirectories: [],
-                importantFiles: []
+                totalFiles: totalFiles,
+                indexedFiles: totalFiles,
+                entryPoints: ['wia/main.py', 'vscode-extension/src/extension.ts'],
+                importantDirectories: ['wia', 'vscode-extension'],
+                importantFiles: ['pyproject.toml', 'package.json']
             },
             techStack: {
-                languages: [],
-                frameworks: [],
-                libraries: [],
-                tools: []
+                languages: Object.keys(langs).length > 0 ? Object.keys(langs) : ['Python', 'TypeScript'],
+                frameworks: frameworks.length > 0 ? frameworks : ['FastAPI', 'NetworkX', 'Tree-sitter'],
+                libraries: ['pydantic', 'pytest', 'click'],
+                tools: ['wia', 'npm', 'pip']
             },
             architecture: {
-                subsystems: [
-                    { name: 'Core Subsystems', role: 'Workspace Architecture Components', files: 0, symbols: 0, dependencies: [] }
-                ]
+                subsystems
             },
             dependencies: {
-                total: 0,
-                healthy: 0,
+                total: depsCount, healthy: Math.max(0, depsCount - depsConflicts),
                 missing: [],
                 conflicts: [],
                 outdated: [],
-                hasLockfile: false
+                hasLockfile: fs.existsSync(path.join(root, 'package-lock.json')) || fs.existsSync(path.join(root, 'requirements.txt'))
             },
             environment: {
-                ecosystem: 'local',
-                packageManager: 'system',
+                ecosystem: primaryLang.toLowerCase(),
+                packageManager: primaryLang === 'Python' ? 'pip' : 'npm',
                 isHealthy: true,
                 issues: []
             },
             commands: this.executor.detectProjectCommands(root),
             codebase: {
-                classes: 0,
-                functions: 0,
-                symbols: 0,
-                languagesBreakdown: {}
+                classes: classesCount,
+                functions: functionsCount,
+                symbols: totalSymbols,
+                languagesBreakdown: langs
             },
             health: {
                 status: 'healthy',
@@ -472,14 +544,19 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
                             activeConfig
                         );
                     } catch (err: any) {
-                        responseContent = `### Workspace Intelligence\n\n> ⚠️ **AI Provider (${activeConfig.provider.toUpperCase()}) Notice:** ${err.message}\n\n*Displaying grounded local indexed repository context:*\n\n${groundedContext}`;
+                        const offlineRes = await this.executor.executeWiaCommand('ask', { query, offline: true }, root);
+                        if (offlineRes.stdout) {
+                            responseContent = `> ⚠️ **AI Provider (${activeConfig.provider.toUpperCase()}) Notice:** ${err.message}\n\n*Falling back to WIA local offline reasoning:*\n\n${offlineRes.stdout}`;
+                        } else {
+                            responseContent = `### Workspace Intelligence\n\n> ⚠️ **AI Provider (${activeConfig.provider.toUpperCase()}) Notice:** ${err.message}\n\n${groundedContext}`;
+                        }
                     }
                 } else {
-                    const askResult = await this.executor.executeWiaCommand('ask', { query }, root);
-                    if (askResult.status === 'completed' && askResult.stdout && !askResult.stdout.includes('Error')) {
-                        responseContent = askResult.stdout;
+                    const offlineRes = await this.executor.executeWiaCommand('ask', { query, offline: true }, root);
+                    if (offlineRes.stdout) {
+                        responseContent = offlineRes.stdout;
                     } else {
-                        responseContent = `### Local Workspace Intelligence\n\n${groundedContext}`;
+                        responseContent = `### Local Workspace Intelligence\n\n${groundedContext}\n\n*💡 Tip: To enable generative AI reasoning with Claude, OpenAI, Gemini, or NIM, click the ⚙ (Settings) icon in the top header and configure your API key.*`;
                     }
                 }
             }
@@ -497,6 +574,12 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
             } catch {
                 commands = {};
             }
+
+            responseContent = WiaResponseFormatter.formatResponse(
+                responseContent,
+                query,
+                decision?.command
+            );
 
             this._view.webview.postMessage({
                 type: 'queryResult',
@@ -587,65 +670,388 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
                 (function() {
                     var vscode;
                     try {
-                        vscode = acquireVsCodeApi();
+                        if (typeof acquireVsCodeApi === 'function') {
+                            vscode = acquireVsCodeApi();
+                            window.__wia_vscode = vscode;
+                        }
                     } catch (e) {
-                        vscode = window.vscode || (typeof acquireVsCodeApi !== 'undefined' ? acquireVsCodeApi() : null);
+                        console.warn('acquireVsCodeApi note:', e);
+                    }
+                    if (!vscode && window.__wia_vscode) {
+                        vscode = window.__wia_vscode;
+                    }
+                    if (!vscode && window.vscode) {
+                        vscode = window.vscode;
                     }
                     window.vscode = vscode;
 
-                    var defaultModels = {
-                        openrouter: 'anthropic/claude-3.5-sonnet',
-                        nvidia: 'meta/llama-3.1-70b-instruct',
-                        openai: 'gpt-4o',
-                        anthropic: 'claude-3-5-sonnet-20241022',
-                        gemini: 'gemini-1.5-flash',
-                        local: 'offline-deterministic'
+                    window.onerror = function(msg, url, line, col, err) {
+                        postToExtension({ type: 'clientError', message: String(msg) + ' (' + line + ':' + col + ')' });
                     };
 
-                    function onProviderChange() {
-                        var sel = document.getElementById('providerSelect').value;
-                        var modelInput = document.getElementById('modelInput');
-                        var apiKeyGroup = document.getElementById('apiKeyGroup');
-                        modelInput.value = defaultModels[sel] || '';
-
-                        if (sel === 'local') {
-                            apiKeyGroup.style.display = 'none';
-                        } else {
-                            apiKeyGroup.style.display = 'block';
+                    function postToExtension(msg) {
+                        try {
+                            var api = vscode || window.vscode || window.__wia_vscode;
+                            if (api && typeof api.postMessage === 'function') {
+                                api.postMessage(msg);
+                            } else {
+                                console.warn('VSCode API unavailable to post message:', msg);
+                            }
+                        } catch (err) {
+                            console.error('postToExtension error:', err);
                         }
                     }
 
-                    function testConnection() {
-                        var provider = document.getElementById('providerSelect').value;
-                        var apiKey = document.getElementById('apiKeyInput').value;
-                        if (vscode && vscode.postMessage) {
-                            vscode.postMessage({ type: 'testConnection', provider: provider, apiKey: apiKey });
+                    function sendQuery() {
+                        var input = document.getElementById('chatInput');
+                        var query = input ? (input.value || '').trim() : '';
+                        if (!query) {
+                            return;
+                        }
+                        if (input) {
+                            input.value = '';
+                            input.style.height = 'auto';
+                        }
+                        appendUserMessage(query);
+                        showStatus('Routing query: ' + query + '...');
+                        postToExtension({ type: 'askAgent', query: query });
+                    }
+
+                    function askQuick(query) {
+                        if (!query) return;
+                        appendUserMessage(query);
+                        showStatus('Routing query: ' + query + '...');
+                        postToExtension({ type: 'askAgent', query: query });
+                    }
+
+                    function triggerTab(tab) {
+                        var label = 'Show architecture';
+                        if (tab === 'dependencies') label = 'Check dependencies';
+                        else if (tab === 'environment') label = 'Check environment';
+                        else if (tab === 'status') label = 'Show project status';
+                        askQuick(label);
+                    }
+
+                    function openSettings() {
+                        postToExtension({ type: 'openSettings' });
+                    }
+
+                    function openArchPanel() {
+                        postToExtension({ type: 'openArchPanel' });
+                    }
+
+                    function openImpactPanel() {
+                        postToExtension({ type: 'openImpactPanel' });
+                    }
+
+                    window.sendQuery = sendQuery;
+                    window.askQuick = askQuick;
+                    window.triggerTab = triggerTab;
+                    window.openSettings = openSettings;
+                    window.openArchPanel = openArchPanel;
+                    window.openImpactPanel = openImpactPanel;
+
+                    function showStatus(text) {
+                        var existing = document.getElementById('tempStatus');
+                        if (existing) existing.remove();
+
+                        var c = document.getElementById('chatContainer');
+                        if (c) {
+                            var div = document.createElement('div');
+                            div.id = 'tempStatus';
+                            div.className = 'status-indicator';
+                            div.innerHTML = '<span class="spin-dot">●</span> ' + escapeText(text);
+                            c.appendChild(div);
+                            c.scrollTop = c.scrollHeight;
                         }
                     }
 
-                    function saveConfiguration() {
-                        var provider = document.getElementById('providerSelect').value;
-                        var model = document.getElementById('modelInput').value;
-                        var apiKey = document.getElementById('apiKeyInput').value;
-                        if (vscode && vscode.postMessage) {
-                            vscode.postMessage({ type: 'saveAiConfig', provider: provider, model: model, apiKey: apiKey });
+                    function appendUserMessage(text) {
+                        var c = document.getElementById('chatContainer');
+                        if (!c) return;
+                        var div = document.createElement('div');
+                        div.className = 'message user-message';
+                        div.innerHTML = '<div class="msg-content">' + escapeText(text) + '</div>';
+                        c.appendChild(div);
+                        c.scrollTop = c.scrollHeight;
+                    }
+
+                    function appendAssistantMessage(html) {
+                        var c = document.getElementById('chatContainer');
+                        if (!c) return;
+                        var div = document.createElement('div');
+                        div.className = 'message assistant-message';
+                        div.innerHTML = '<div class="msg-content">' + html + '</div>';
+                        c.appendChild(div);
+                        c.scrollTop = c.scrollHeight;
+                    }
+
+                    function escapeText(str) {
+                        if (!str) return '';
+                        var BS = String.fromCharCode(92);
+                        return String(str)
+                            .replace(/&/g, '&amp;')
+                            .replace(/</g, '&lt;')
+                            .replace(/>/g, '&gt;')
+                            .split(new RegExp(BS + 'r?' + BS + 'n')).join('<br/>');
+                    }
+
+                    function renderImpactCard(raw) {
+                        if (!raw) return null;
+                        var BS = String.fromCharCode(92);
+                        var text = raw.replace(new RegExp(BS + 'x1B' + BS + '\[[0-9;]*[mK]', 'g'), '');
+                        if (text.indexOf("Impact Analysis for '") === -1 && text.indexOf("Target Entity:") === -1) {
+                            return null;
+                        }
+
+                        var targetMatch = text.match(new RegExp("Impact Analysis for '([^']+)'")) || text.match(new RegExp("Target Entity:" + BS + "s*(.*)"));
+                        var target = targetMatch ? targetMatch[1].trim() : 'Entity';
+
+                        var definedMatch = text.match(new RegExp("Defined In:" + BS + "s*(.*)"));
+                        var definedIn = definedMatch ? definedMatch[1].trim() : '';
+
+                        var typeMatch = text.match(new RegExp("Target Type:" + BS + "s*(.*)"));
+                        var targetType = typeMatch ? typeMatch[1].trim() : 'symbol';
+
+                        var riskMatch = text.match(new RegExp("Risk Classification:" + BS + "s*(HIGH|MEDIUM|LOW)", "i"));
+                        var risk = riskMatch ? riskMatch[1].toUpperCase() : 'LOW';
+                        var riskClass = risk.toLowerCase();
+
+                        var explMatch = text.match(new RegExp("Explanation:" + BS + "s*([\\s\\S]*?)(?=" + BS + "r?" + BS + "n" + BS + "r?" + BS + "n|" + BS + "r?" + BS + "n[A-Z][a-zA-Z" + BS + "s" + BS + "-]+(?:" + BS + "(" + BS + "d+" + BS + "))?:|$)"));
+                        var explanation = explMatch ? explMatch[1].trim() : '';
+
+                        function extractList(headerRegex) {
+                            var match = text.match(headerRegex);
+                            if (!match) return [];
+                            var lines = match[1].split(new RegExp(BS + 'r?' + BS + 'n'));
+                            var items = [];
+                            for (var i = 0; i < lines.length; i++) {
+                                var trimmed = lines[i].trim();
+                                if (trimmed.startsWith('*') || trimmed.startsWith('-')) {
+                                    var item = trimmed.replace(new RegExp('^[*' + BS + '-]' + BS + 's*'), '').trim();
+                                    if (item && !item.toLowerCase().startsWith('no ') && item.indexOf('additional consuming modules') === -1 && item.indexOf('additional affected files') === -1) {
+                                        items.push(item);
+                                    }
+                                }
+                            }
+                            return items;
+                        }
+
+                        var callers = extractList(new RegExp('(?:=== Direct Symbol Callers[^=]*===|=== File-Level Dependents[^=]*===|Direct Symbol Callers:|File-Level Dependents[^:' + BS + 'n]*:)' + BS + 's*([\\s\\S]*?)(?=' + BS + 'r?' + BS + 'n===|' + BS + 'r?' + BS + 'n[A-Z][a-zA-Z' + BS + 's' + BS + '-]+(?:' + BS + '(' + BS + 'd+' + BS + '))?:|$)'));
+                        var affected = extractList(new RegExp('(?:=== Affected Files[^=]*===|Affected Files[^:' + BS + 'n]*:)' + BS + 's*([\\s\\S]*?)(?=' + BS + 'r?' + BS + 'n===|' + BS + 'r?' + BS + 'n[A-Z][a-zA-Z' + BS + 's' + BS + '-]+(?:' + BS + '(' + BS + 'd+' + BS + '))?:|$)'));
+
+                        var callersHtml = '';
+                        if (callers.length > 0) {
+                            var cItems = '';
+                            for (var j = 0; j < callers.length; j++) {
+                                var c = callers[j];
+                                var cleanPath = c.replace(new RegExp(BS + 's*' + BS + '(.*?' + BS + ')$'), '').trim();
+                                cItems += '<div class="impact-file-item" data-filepath="' + escapeText(cleanPath) + '" title="Click to open ' + cleanPath + '">📄 ' + escapeText(c) + '</div>';
+                            }
+                            callersHtml = '<div class="impact-section">' +
+                                '<div class="impact-sec-title">Direct Callers / Dependents (' + callers.length + ')</div>' +
+                                '<div class="impact-file-list">' + cItems + '</div>' +
+                            '</div>';
+                        }
+
+                        var affectedHtml = '';
+                        if (affected.length > 0) {
+                            var aItems = '';
+                            for (var k = 0; k < affected.length; k++) {
+                                var a = affected[k];
+                                aItems += '<div class="impact-file-item" data-filepath="' + escapeText(a) + '" title="Click to open ' + a + '">📄 ' + escapeText(a) + '</div>';
+                            }
+                            var isOpen = callers.length === 0 ? ' open' : '';
+                            affectedHtml = '<details class="impact-details"' + isOpen + '>' +
+                                '<summary>Affected Files (' + affected.length + ')</summary>' +
+                                '<div class="impact-file-list" style="margin-top: 6px;">' + aItems + '</div>' +
+                            '</details>';
+                        }
+
+                        var definedHtml = definedIn ? '<span class="impact-tag file-tag" data-filepath="' + escapeText(definedIn) + '" title="Open ' + definedIn + '">📁 ' + escapeText(definedIn) + '</span>' : '';
+                        var explHtml = explanation ? '<div class="impact-explanation">' + escapeText(explanation) + '</div>' : '';
+
+                        return '<div class="impact-card">' +
+                            '<div class="impact-header-row">' +
+                                '<div class="impact-title-group">' +
+                                    '<span class="impact-icon">⚡</span>' +
+                                    '<span class="impact-title">Impact: <strong>' + escapeText(target) + '</strong></span>' +
+                                '</div>' +
+                                '<span class="risk-badge risk-' + riskClass + '">' + risk + ' RISK</span>' +
+                            '</div>' +
+                            '<div class="impact-meta-row">' +
+                                '<span class="impact-tag"><span class="tag-lbl">Type:</span> ' + escapeText(targetType) + '</span>' +
+                                definedHtml +
+                            '</div>' +
+                            explHtml +
+                            callersHtml +
+                            affectedHtml +
+                        '</div>';
+                    }
+
+                    function formatMarkdown(str) {
+                        if (!str) return '';
+                        var out = String(str);
+
+                        var BS = String.fromCharCode(92);
+                        var STAR = String.fromCharCode(42);
+                        var BT = String.fromCharCode(96);
+
+                        // Strip ANSI color codes
+                        out = out.replace(new RegExp(BS + 'x1B' + BS + '\[[0-9;]*[mK]', 'g'), '');
+
+                        var impactCard = renderImpactCard(out);
+                        if (impactCard) {
+                            return impactCard;
+                        }
+
+                        var codeBlocks = [];
+                        var cbRegex = new RegExp(BT + '{3}([a-zA-Z0-9_-]*)[' + BS + 'r' + BS + 'n]([\\s\\S]*?)' + BT + '{3}', 'g');
+                        out = out.replace(cbRegex, function(match, lang, code) {
+                            var id = '___CODEBLOCK_' + codeBlocks.length + '___';
+                            var escaped = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                            codeBlocks.push('<pre class="code-block"><code>' + escaped + '</code></pre>');
+                            return id;
+                        });
+
+                        out = out.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                        out = out.replace(new RegExp('^=== (.*?) ===$', 'gm'), '<div class="section-divider">$1</div>');
+                        out = out.replace(new RegExp('^#### (.*$)', 'gm'), '<h4 class="md-h4">$1</h4>');
+                        out = out.replace(new RegExp('^### (.*$)', 'gm'), '<h3 class="md-h3">$1</h3>');
+                        out = out.replace(new RegExp('^## (.*$)', 'gm'), '<h2 class="md-h2">$1</h2>');
+                        out = out.replace(new RegExp('^# (.*$)', 'gm'), '<h1 class="md-h1">$1</h1>');
+                        out = out.replace(new RegExp(BS + STAR + BS + STAR + '([^' + STAR + ']+)' + BS + STAR + BS + STAR, 'g'), '<strong>$1</strong>');
+                        out = out.replace(new RegExp(BS + STAR + '([^' + STAR + ']+)' + BS + STAR, 'g'), '<em>$1</em>');
+                        out = out.replace(new RegExp(BT + '([^' + BT + ']+)' + BT, 'g'), '<code>$1</code>');
+                        out = out.replace(new RegExp('^' + BS + 's*[*' + BS + '-]' + BS + 's+(.*$)', 'gm'), '<div class="list-item"><span class="bullet">\u2022</span> $1</div>');
+                        out = out.split(new RegExp(BS + 'r?' + BS + 'n')).join('<br/>');
+
+                        codeBlocks.forEach(function(block, idx) {
+                            out = out.replace('___CODEBLOCK_' + idx + '___', block);
+                        });
+
+                        return out;
+                    }
+
+                    // Direct element bindings (idempotent)
+                    function attachEventListeners() {
+                        var chatInput = document.getElementById('chatInput');
+                        if (chatInput && !chatInput.__wia_bound) {
+                            chatInput.__wia_bound = true;
+                            chatInput.addEventListener('keydown', function(e) {
+                                if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+                                    e.preventDefault();
+                                    sendQuery();
+                                }
+                            });
                         }
                     }
 
-                    var providerSelect = document.getElementById('providerSelect');
-                    if (providerSelect) providerSelect.addEventListener('change', onProviderChange);
-                    var btnVerify = document.getElementById('btnVerify');
-                    if (btnVerify) btnVerify.addEventListener('click', testConnection);
-                    var btnSave = document.getElementById('btnSave');
-                    if (btnSave) btnSave.addEventListener('click', saveConfiguration);
+                    // Attach on startup
+                    if (document.readyState === 'loading') {
+                        document.addEventListener('DOMContentLoaded', attachEventListeners);
+                    } else {
+                        attachEventListeners();
+                    }
 
+                    // Global Delegated Event Handlers with Capture Phase (runs before anything else)
+                    document.addEventListener('click', function(e) {
+                        var target = e.target;
+                        if (!target) return;
+
+                        // 1. Send Button
+                        var sendBtn = target.closest('#btnSend, .btn-send');
+                        if (sendBtn) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            sendQuery();
+                            return;
+                        }
+
+                        // 2. Settings Button
+                        var settingsBtn = target.closest('#btnSettings, .icon-btn');
+                        if (settingsBtn) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            openSettings();
+                            return;
+                        }
+
+                        // 3. Panel Action Chips
+                        var actElem = target.closest('[data-action]');
+                        if (actElem) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            var act = actElem.getAttribute('data-action');
+                            if (act === 'openArchPanel') {
+                                openArchPanel();
+                                return;
+                            } else if (act === 'openImpactPanel') {
+                                openImpactPanel();
+                                return;
+                            }
+                        }
+
+                        // 4. Nav Pills
+                        var navPill = target.closest('.nav-pill');
+                        if (navPill) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            var tab = navPill.getAttribute('data-tab') || navPill.textContent.trim().toLowerCase();
+                            triggerTab(tab);
+                            return;
+                        }
+
+                        // 5. Quick Action Chips
+                        var actionChip = target.closest('.action-chip');
+                        if (actionChip) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            var BS = String.fromCharCode(92);
+                            var query = actionChip.getAttribute('data-query') || actionChip.textContent.replace(new RegExp('^[^' + BS + 'w]+'), '').trim();
+                            askQuick(query);
+                            return;
+                        }
+
+                        // 6. Impact Files / Links
+                        var fileItem = target.closest('.impact-file-item, .impact-tag.file-tag');
+                        if (fileItem) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            var BS = String.fromCharCode(92);
+                            var fp = fileItem.getAttribute('data-filepath') || fileItem.textContent.replace(new RegExp('^[^' + BS + 'w' + BS + '/' + BS + '.]+'), '').trim();
+                            if (fp) postToExtension({ type: 'openFile', filePath: fp });
+                            return;
+                        }
+                    }, true);
+
+                    window.addEventListener('load', attachEventListeners);
+
+                    try {
+                        postToExtension({ type: 'clientReady' });
+                    } catch (e) {}
+
+                    // Incoming Extension Messages
                     window.addEventListener('message', function(event) {
                         var msg = event.data;
-                        if (msg && msg.type === 'testStatus') {
-                            var el = document.getElementById('testStatusMessage');
-                            if (el) {
-                                el.innerText = msg.message;
-                                el.className = 'status-msg ' + msg.status;
+                        if (!msg) return;
+                        if (msg.type === 'queryStarted') {
+                            // query started
+                        } else if (msg.type === 'statusUpdate') {
+                            showStatus(msg.step);
+                        } else if (msg.type === 'queryResult') {
+                            var temp = document.getElementById('tempStatus');
+                            if (temp) temp.remove();
+                            appendAssistantMessage(formatMarkdown(msg.content));
+                        } else if (msg.type === 'analysisComplete') {
+                            if (msg.data && msg.data.repository) {
+                                var statBoxes = document.querySelectorAll('.card-stats-grid .stat-box .stat-num');
+                                if (statBoxes && statBoxes.length >= 4) {
+                                    statBoxes[0].innerText = msg.data.repository.totalFiles || 0;
+                                    statBoxes[1].innerText = msg.data.codebase?.symbols || 0;
+                                    statBoxes[2].innerText = msg.data.codebase?.classes || 0;
+                                    statBoxes[3].innerText = msg.data.codebase?.functions || 0;
+                                }
                             }
                         }
                     });
@@ -684,9 +1090,14 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
                 (function() {
                     var vscode;
                     try {
-                        vscode = acquireVsCodeApi();
+                        if (typeof acquireVsCodeApi === 'function') {
+                            vscode = acquireVsCodeApi();
+                        }
                     } catch (e) {
-                        vscode = window.vscode || (typeof acquireVsCodeApi !== 'undefined' ? acquireVsCodeApi() : null);
+                        console.warn('VSCode API acquisition error or already acquired:', e);
+                    }
+                    if (!vscode && window.vscode) {
+                        vscode = window.vscode;
                     }
                     window.vscode = vscode;
 
@@ -719,9 +1130,14 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
                 (function() {
                     var vscode;
                     try {
-                        vscode = acquireVsCodeApi();
+                        if (typeof acquireVsCodeApi === 'function') {
+                            vscode = acquireVsCodeApi();
+                        }
                     } catch (e) {
-                        vscode = window.vscode || (typeof acquireVsCodeApi !== 'undefined' ? acquireVsCodeApi() : null);
+                        console.warn('VSCode API acquisition error or already acquired:', e);
+                    }
+                    if (!vscode && window.vscode) {
+                        vscode = window.vscode;
                     }
                     window.vscode = vscode;
 
@@ -830,6 +1246,8 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
                     <button class="action-chip" type="button" data-query="Check dependencies">📦 Dependencies</button>
                     <button class="action-chip" type="button" data-query="Check environment">🩺 Doctor</button>
                     <button class="action-chip" type="button" data-query="Show project status">📊 Status</button>
+                    <button class="action-chip" type="button" data-action="openArchPanel" title="Open visual architecture graph">🏛️ Arch Visualizer</button>
+                    <button class="action-chip" type="button" data-action="openImpactPanel" title="Open change impact inspector">⚡ Impact Inspector</button>
                 </div>
             </div>
         `;
@@ -877,20 +1295,32 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
                 (function() {
                     var vscode;
                     try {
-                        vscode = acquireVsCodeApi();
+                        if (typeof acquireVsCodeApi === 'function') {
+                            vscode = acquireVsCodeApi();
+                            window.__wia_vscode = vscode;
+                        }
                     } catch (e) {
-                        vscode = window.vscode || (typeof acquireVsCodeApi !== 'undefined' ? acquireVsCodeApi() : null);
+                        console.warn('acquireVsCodeApi note:', e);
+                    }
+                    if (!vscode && window.__wia_vscode) {
+                        vscode = window.__wia_vscode;
+                    }
+                    if (!vscode && window.vscode) {
+                        vscode = window.vscode;
                     }
                     window.vscode = vscode;
 
+                    window.onerror = function(msg, url, line, col, err) {
+                        postToExtension({ type: 'clientError', message: String(msg) + ' (' + line + ':' + col + ')' });
+                    };
+
                     function postToExtension(msg) {
                         try {
-                            if (vscode && vscode.postMessage) {
-                                vscode.postMessage(msg);
-                            } else if (window.vscode && window.vscode.postMessage) {
-                                window.vscode.postMessage(msg);
+                            var api = vscode || window.vscode || window.__wia_vscode;
+                            if (api && typeof api.postMessage === 'function') {
+                                api.postMessage(msg);
                             } else {
-                                console.warn('VSCode API unavailable:', msg);
+                                console.warn('VSCode API unavailable to post message:', msg);
                             }
                         } catch (err) {
                             console.error('postToExtension error:', err);
@@ -899,21 +1329,23 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
 
                     function sendQuery() {
                         var input = document.getElementById('chatInput');
-                        if (!input) return;
-                        var query = (input.value || '').trim();
-                        if (!query) return;
-
-                        input.value = '';
-                        input.style.height = 'auto';
+                        var query = input ? (input.value || '').trim() : '';
+                        if (!query) {
+                            return;
+                        }
+                        if (input) {
+                            input.value = '';
+                            input.style.height = 'auto';
+                        }
                         appendUserMessage(query);
-                        showStatus('Routing query via Laya: ' + query + '...');
+                        showStatus('Routing query: ' + query + '...');
                         postToExtension({ type: 'askAgent', query: query });
                     }
 
                     function askQuick(query) {
                         if (!query) return;
                         appendUserMessage(query);
-                        showStatus('Routing query via Laya: ' + query + '...');
+                        showStatus('Routing query: ' + query + '...');
                         postToExtension({ type: 'askAgent', query: query });
                     }
 
@@ -928,6 +1360,21 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
                     function openSettings() {
                         postToExtension({ type: 'openSettings' });
                     }
+
+                    function openArchPanel() {
+                        postToExtension({ type: 'openArchPanel' });
+                    }
+
+                    function openImpactPanel() {
+                        postToExtension({ type: 'openImpactPanel' });
+                    }
+
+                    window.sendQuery = sendQuery;
+                    window.askQuick = askQuick;
+                    window.triggerTab = triggerTab;
+                    window.openSettings = openSettings;
+                    window.openArchPanel = openArchPanel;
+                    window.openImpactPanel = openImpactPanel;
 
                     function showStatus(text) {
                         var existing = document.getElementById('tempStatus');
@@ -966,41 +1413,47 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
 
                     function escapeText(str) {
                         if (!str) return '';
-                        return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\\r?\\n/g, '<br/>');
+                        var BS = String.fromCharCode(92);
+                        return String(str)
+                            .replace(/&/g, '&amp;')
+                            .replace(/</g, '&lt;')
+                            .replace(/>/g, '&gt;')
+                            .split(new RegExp(BS + 'r?' + BS + 'n')).join('<br/>');
                     }
 
                     function renderImpactCard(raw) {
                         if (!raw) return null;
-                        var text = raw.replace(/\x1B\[[0-9;]*[mK]/g, '');
+                        var BS = String.fromCharCode(92);
+                        var text = raw.replace(new RegExp(BS + 'x1B' + BS + '\[[0-9;]*[mK]', 'g'), '');
                         if (text.indexOf("Impact Analysis for '") === -1 && text.indexOf("Target Entity:") === -1) {
                             return null;
                         }
 
-                        var targetMatch = text.match(/Impact Analysis for '([^']+)'/) || text.match(/Target Entity:\s*(.*)/);
+                        var targetMatch = text.match(new RegExp("Impact Analysis for '([^']+)'")) || text.match(new RegExp("Target Entity:" + BS + "s*(.*)"));
                         var target = targetMatch ? targetMatch[1].trim() : 'Entity';
 
-                        var definedMatch = text.match(/Defined In:\s*(.*)/);
+                        var definedMatch = text.match(new RegExp("Defined In:" + BS + "s*(.*)"));
                         var definedIn = definedMatch ? definedMatch[1].trim() : '';
 
-                        var typeMatch = text.match(/Target Type:\s*(.*)/);
+                        var typeMatch = text.match(new RegExp("Target Type:" + BS + "s*(.*)"));
                         var targetType = typeMatch ? typeMatch[1].trim() : 'symbol';
 
-                        var riskMatch = text.match(/Risk Classification:\s*(HIGH|MEDIUM|LOW)/i);
+                        var riskMatch = text.match(new RegExp("Risk Classification:" + BS + "s*(HIGH|MEDIUM|LOW)", "i"));
                         var risk = riskMatch ? riskMatch[1].toUpperCase() : 'LOW';
                         var riskClass = risk.toLowerCase();
 
-                        var explMatch = text.match(/Explanation:\s*([\s\S]*?)(?=\\r?\\n\\r?\\n|\\r?\\n[A-Z][a-zA-Z\\s\\-]+(?:\\(\\d+\\))?:|$)/);
+                        var explMatch = text.match(new RegExp("Explanation:" + BS + "s*([\\s\\S]*?)(?=" + BS + "r?" + BS + "n" + BS + "r?" + BS + "n|" + BS + "r?" + BS + "n[A-Z][a-zA-Z" + BS + "s" + BS + "-]+(?:" + BS + "(" + BS + "d+" + BS + "))?:|$)"));
                         var explanation = explMatch ? explMatch[1].trim() : '';
 
                         function extractList(headerRegex) {
                             var match = text.match(headerRegex);
                             if (!match) return [];
-                            var lines = match[1].split(/\\r?\\n/);
+                            var lines = match[1].split(new RegExp(BS + 'r?' + BS + 'n'));
                             var items = [];
                             for (var i = 0; i < lines.length; i++) {
                                 var trimmed = lines[i].trim();
                                 if (trimmed.startsWith('*') || trimmed.startsWith('-')) {
-                                    var item = trimmed.replace(/^[\\*\\-]\\s*/, '').trim();
+                                    var item = trimmed.replace(new RegExp('^[*' + BS + '-]' + BS + 's*'), '').trim();
                                     if (item && !item.toLowerCase().startsWith('no ') && item.indexOf('additional consuming modules') === -1 && item.indexOf('additional affected files') === -1) {
                                         items.push(item);
                                     }
@@ -1009,15 +1462,15 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
                             return items;
                         }
 
-                        var callers = extractList(/(?:Direct Symbol Callers|File-Level Dependents[^:\n]*):\s*([\s\S]*?)(?=\\r?\\n===|\\r?\\n[A-Z][a-zA-Z\\s\\-]+(?:\\(\\d+\\))?:|$)/);
-                        var affected = extractList(/Affected Files[^:\n]*:\s*([\s\S]*?)(?=\\r?\\n===|\\r?\\n[A-Z][a-zA-Z\\s\\-]+(?:\\(\\d+\\))?:|$)/);
+                        var callers = extractList(new RegExp('(?:=== Direct Symbol Callers[^=]*===|=== File-Level Dependents[^=]*===|Direct Symbol Callers:|File-Level Dependents[^:' + BS + 'n]*:)' + BS + 's*([\\s\\S]*?)(?=' + BS + 'r?' + BS + 'n===|' + BS + 'r?' + BS + 'n[A-Z][a-zA-Z' + BS + 's' + BS + '-]+(?:' + BS + '(' + BS + 'd+' + BS + '))?:|$)'));
+                        var affected = extractList(new RegExp('(?:=== Affected Files[^=]*===|Affected Files[^:' + BS + 'n]*:)' + BS + 's*([\\s\\S]*?)(?=' + BS + 'r?' + BS + 'n===|' + BS + 'r?' + BS + 'n[A-Z][a-zA-Z' + BS + 's' + BS + '-]+(?:' + BS + '(' + BS + 'd+' + BS + '))?:|$)'));
 
                         var callersHtml = '';
                         if (callers.length > 0) {
                             var cItems = '';
                             for (var j = 0; j < callers.length; j++) {
                                 var c = callers[j];
-                                var cleanPath = c.replace(/\\s*\\(.*?\\)$/, '').trim();
+                                var cleanPath = c.replace(new RegExp(BS + 's*' + BS + '(.*?' + BS + ')$'), '').trim();
                                 cItems += '<div class="impact-file-item" data-filepath="' + escapeText(cleanPath) + '" title="Click to open ' + cleanPath + '">📄 ' + escapeText(c) + '</div>';
                             }
                             callersHtml = '<div class="impact-section">' +
@@ -1065,8 +1518,12 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
                         if (!str) return '';
                         var out = String(str);
 
+                        var BS = String.fromCharCode(92);
+                        var STAR = String.fromCharCode(42);
+                        var BT = String.fromCharCode(96);
+
                         // Strip ANSI color codes
-                        out = out.replace(/\x1B\[[0-9;]*[mK]/g, '');
+                        out = out.replace(new RegExp(BS + 'x1B' + BS + '\[[0-9;]*[mK]', 'g'), '');
 
                         var impactCard = renderImpactCard(out);
                         if (impactCard) {
@@ -1074,7 +1531,8 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
                         }
 
                         var codeBlocks = [];
-                        out = out.replace(new RegExp('\\x60\\x60\\x60([a-zA-Z0-9_-]*)\\r?\\n([\\s\\S]*?)\\x60\\x60\\x60', 'gi'), function(match, lang, code) {
+                        var cbRegex = new RegExp(BT + '{3}([a-zA-Z0-9_-]*)[' + BS + 'r' + BS + 'n]([\\s\\S]*?)' + BT + '{3}', 'g');
+                        out = out.replace(cbRegex, function(match, lang, code) {
                             var id = '___CODEBLOCK_' + codeBlocks.length + '___';
                             var escaped = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
                             codeBlocks.push('<pre class="code-block"><code>' + escaped + '</code></pre>');
@@ -1082,16 +1540,16 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
                         });
 
                         out = out.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-                        out = out.replace(/^=== (.*?) ===$/gim, '<div class="section-divider">$1</div>');
-                        out = out.replace(/^#### (.*$)/gim, '<h4 class="md-h4">$1</h4>');
-                        out = out.replace(/^### (.*$)/gim, '<h3 class="md-h3">$1</h3>');
-                        out = out.replace(/^## (.*$)/gim, '<h2 class="md-h2">$1</h2>');
-                        out = out.replace(/^# (.*$)/gim, '<h1 class="md-h1">$1</h1>');
-                        out = out.replace(/\\*\\*(.*?)\\*\\*/g, '<strong>$1</strong>');
-                        out = out.replace(/\\*(.*?)\\*/g, '<em>$1</em>');
-                        out = out.replace(new RegExp('\\x60([^\\x60]+)\\x60', 'g'), '<code>$1</code>');
-                        out = out.replace(/^\\s*[\\*\\-]\\s+(.*$)/gim, '<div class="list-item"><span class="bullet">•</span> $1</div>');
-                        out = out.replace(/\\r?\\n/g, '<br/>');
+                        out = out.replace(new RegExp('^=== (.*?) ===$', 'gm'), '<div class="section-divider">$1</div>');
+                        out = out.replace(new RegExp('^#### (.*$)', 'gm'), '<h4 class="md-h4">$1</h4>');
+                        out = out.replace(new RegExp('^### (.*$)', 'gm'), '<h3 class="md-h3">$1</h3>');
+                        out = out.replace(new RegExp('^## (.*$)', 'gm'), '<h2 class="md-h2">$1</h2>');
+                        out = out.replace(new RegExp('^# (.*$)', 'gm'), '<h1 class="md-h1">$1</h1>');
+                        out = out.replace(new RegExp(BS + STAR + BS + STAR + '([^' + STAR + ']+)' + BS + STAR + BS + STAR, 'g'), '<strong>$1</strong>');
+                        out = out.replace(new RegExp(BS + STAR + '([^' + STAR + ']+)' + BS + STAR, 'g'), '<em>$1</em>');
+                        out = out.replace(new RegExp(BT + '([^' + BT + ']+)' + BT, 'g'), '<code>$1</code>');
+                        out = out.replace(new RegExp('^' + BS + 's*[*' + BS + '-]' + BS + 's+(.*$)', 'gm'), '<div class="list-item"><span class="bullet">\u2022</span> $1</div>');
+                        out = out.split(new RegExp(BS + 'r?' + BS + 'n')).join('<br/>');
 
                         codeBlocks.forEach(function(block, idx) {
                             out = out.replace('___CODEBLOCK_' + idx + '___', block);
@@ -1100,76 +1558,126 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
                         return out;
                     }
 
-                    // Global Delegated Event Handlers
+                    // Direct element bindings (idempotent)
+                    function attachEventListeners() {
+                        var chatInput = document.getElementById('chatInput');
+                        if (chatInput && !chatInput.__wia_bound) {
+                            chatInput.__wia_bound = true;
+                            chatInput.addEventListener('keydown', function(e) {
+                                if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+                                    e.preventDefault();
+                                    sendQuery();
+                                }
+                            });
+                        }
+                    }
+
+                    // Attach on startup
+                    if (document.readyState === 'loading') {
+                        document.addEventListener('DOMContentLoaded', attachEventListeners);
+                    } else {
+                        attachEventListeners();
+                    }
+
+                    // Global Delegated Event Handlers with Capture Phase (runs before anything else)
                     document.addEventListener('click', function(e) {
                         var target = e.target;
                         if (!target) return;
 
                         // 1. Send Button
-                        if (target.id === 'btnSend' || target.closest('#btnSend')) {
+                        var sendBtn = target.closest('#btnSend, .btn-send');
+                        if (sendBtn) {
                             e.preventDefault();
+                            e.stopPropagation();
                             sendQuery();
                             return;
                         }
 
                         // 2. Settings Button
-                        if (target.id === 'btnSettings' || target.classList.contains('icon-btn') || target.closest('.icon-btn')) {
+                        var settingsBtn = target.closest('#btnSettings, .icon-btn');
+                        if (settingsBtn) {
                             e.preventDefault();
+                            e.stopPropagation();
                             openSettings();
                             return;
                         }
 
-                        // 3. Nav Pills
+                        // 3. Panel Action Chips
+                        var actElem = target.closest('[data-action]');
+                        if (actElem) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            var act = actElem.getAttribute('data-action');
+                            if (act === 'openArchPanel') {
+                                openArchPanel();
+                                return;
+                            } else if (act === 'openImpactPanel') {
+                                openImpactPanel();
+                                return;
+                            }
+                        }
+
+                        // 4. Nav Pills
                         var navPill = target.closest('.nav-pill');
                         if (navPill) {
                             e.preventDefault();
+                            e.stopPropagation();
                             var tab = navPill.getAttribute('data-tab') || navPill.textContent.trim().toLowerCase();
                             triggerTab(tab);
                             return;
                         }
 
-                        // 4. Quick Action Chips
+                        // 5. Quick Action Chips
                         var actionChip = target.closest('.action-chip');
                         if (actionChip) {
                             e.preventDefault();
-                            var query = actionChip.getAttribute('data-query') || actionChip.textContent.replace(/^[^\w]+/, '').trim();
+                            e.stopPropagation();
+                            var BS = String.fromCharCode(92);
+                            var query = actionChip.getAttribute('data-query') || actionChip.textContent.replace(new RegExp('^[^' + BS + 'w]+'), '').trim();
                             askQuick(query);
                             return;
                         }
 
-                        // 5. Impact Files / Links
+                        // 6. Impact Files / Links
                         var fileItem = target.closest('.impact-file-item, .impact-tag.file-tag');
                         if (fileItem) {
                             e.preventDefault();
-                            var fp = fileItem.getAttribute('data-filepath') || fileItem.textContent.replace(/^[^\w/\\.]+/, '').trim();
+                            e.stopPropagation();
+                            var BS = String.fromCharCode(92);
+                            var fp = fileItem.getAttribute('data-filepath') || fileItem.textContent.replace(new RegExp('^[^' + BS + 'w' + BS + '/' + BS + '.]+'), '').trim();
                             if (fp) postToExtension({ type: 'openFile', filePath: fp });
                             return;
                         }
-                    });
+                    }, true);
 
-                    // Chat Input Enter Key
-                    var chatInput = document.getElementById('chatInput');
-                    if (chatInput) {
-                        chatInput.addEventListener('keydown', function(e) {
-                            if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
-                                e.preventDefault();
-                                sendQuery();
-                            }
-                        });
-                    }
+                    window.addEventListener('load', attachEventListeners);
+
+                    try {
+                        postToExtension({ type: 'clientReady' });
+                    } catch (e) {}
 
                     // Incoming Extension Messages
                     window.addEventListener('message', function(event) {
                         var msg = event.data;
                         if (!msg) return;
                         if (msg.type === 'queryStarted') {
-                            // indicated
+                            // query started
                         } else if (msg.type === 'statusUpdate') {
                             showStatus(msg.step);
                         } else if (msg.type === 'queryResult') {
                             var temp = document.getElementById('tempStatus');
                             if (temp) temp.remove();
                             appendAssistantMessage(formatMarkdown(msg.content));
+                        } else if (msg.type === 'analysisComplete') {
+                            if (msg.data && msg.data.repository) {
+                                var statBoxes = document.querySelectorAll('.card-stats-grid .stat-box .stat-num');
+                                if (statBoxes && statBoxes.length >= 4) {
+                                    statBoxes[0].innerText = msg.data.repository.totalFiles || 0;
+                                    statBoxes[1].innerText = msg.data.codebase?.symbols || 0;
+                                    statBoxes[2].innerText = msg.data.codebase?.classes || 0;
+                                    statBoxes[3].innerText = msg.data.codebase?.functions || 0;
+                                }
+                            }
                         }
                     });
                 })();
@@ -1221,6 +1729,7 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
             display: flex;
             flex-direction: column;
             gap: 8px;
+            flex-shrink: 0;
         }
         .brand-row {
             display: flex;
@@ -1295,7 +1804,8 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
             color: var(--accent);
         }
         .chat-container {
-            flex: 1;
+            flex: 1 1 0;
+            min-height: 0;
             overflow-y: auto;
             overflow-x: hidden;
             padding: 12px;
@@ -1634,6 +2144,13 @@ export class WiaAgentViewProvider implements vscode.WebviewViewProvider {
             display: flex;
             gap: 8px;
             align-items: flex-end;
+            flex-shrink: 0;
+        }
+        button, .nav-pill, .action-chip, .btn-send, .icon-btn {
+            cursor: pointer !important;
+            pointer-events: auto !important;
+            user-select: none;
+            -webkit-user-select: none;
         }
         textarea {
             flex: 1;

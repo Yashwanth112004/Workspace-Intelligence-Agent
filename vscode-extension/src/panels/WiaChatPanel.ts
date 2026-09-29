@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { WiaApiClient } from '../apiClient';
+import { WiaExecutor } from '../executor/wiaExecutor';
 
 export class WiaChatPanel {
     public static currentPanel: WiaChatPanel | undefined;
@@ -12,7 +13,8 @@ export class WiaChatPanel {
         apiClient: WiaApiClient,
         repoId: string | null,
         rootPath: string | null,
-        initialPrompt?: string
+        initialPrompt?: string,
+        executor?: WiaExecutor
     ) {
         const column = vscode.window.activeTextEditor ? vscode.window.activeTextEditor.viewColumn : undefined;
 
@@ -34,7 +36,7 @@ export class WiaChatPanel {
             }
         );
 
-        WiaChatPanel.currentPanel = new WiaChatPanel(panel, extensionUri, apiClient, repoId, rootPath, initialPrompt);
+        WiaChatPanel.currentPanel = new WiaChatPanel(panel, extensionUri, apiClient, repoId, rootPath, initialPrompt, executor);
     }
 
     private constructor(
@@ -43,7 +45,8 @@ export class WiaChatPanel {
         private apiClient: WiaApiClient,
         private repoId: string | null,
         private rootPath: string | null,
-        initialPrompt?: string
+        initialPrompt?: string,
+        private executor?: WiaExecutor
     ) {
         this._panel = panel;
         this._extensionUri = extensionUri;
@@ -113,7 +116,24 @@ export class WiaChatPanel {
                 const ingestRes = await this.apiClient.ingest(this.rootPath, 'Workspace');
                 this.repoId = ingestRes.repo_id;
             } catch {
-                // If daemon is not running, prompt user to start daemon or scan
+                // Fallback to local WIA offline reasoning when daemon is offline
+                if (this.executor && this.rootPath) {
+                    try {
+                        const res = await this.executor.executeWiaCommand('ask', { query: text }, this.rootPath);
+                        this._panel.webview.postMessage({
+                            command: 'setThinking',
+                            isThinking: false
+                        });
+                        this._panel.webview.postMessage({
+                            command: 'addMessage',
+                            sender: 'assistant',
+                            text: res.stdout || res.stderr || 'No response generated.',
+                            citations: []
+                        });
+                        return;
+                    } catch (e: any) {}
+                }
+
                 this._panel.webview.postMessage({
                     command: 'setThinking',
                     isThinking: false
@@ -410,17 +430,24 @@ export class WiaChatPanel {
         (function() {
             var vscode;
             try {
-                vscode = acquireVsCodeApi();
+                if (typeof acquireVsCodeApi === 'function') {
+                    vscode = acquireVsCodeApi();
+                }
             } catch (e) {
-                vscode = window.vscode || (typeof acquireVsCodeApi !== 'undefined' ? acquireVsCodeApi() : null);
+                console.warn('VSCode API acquisition error or already acquired:', e);
+            }
+            if (!vscode && window.vscode) {
+                vscode = window.vscode;
             }
             window.vscode = vscode;
 
             function postToExtension(msg) {
                 try {
-                    var api = window.vscode || (typeof vscode !== 'undefined' ? vscode : null);
-                    if (api && api.postMessage) {
+                    var api = vscode || window.vscode;
+                    if (api && typeof api.postMessage === 'function') {
                         api.postMessage(msg);
+                    } else {
+                        console.warn('VSCode API unavailable:', msg);
                     }
                 } catch (err) {
                     console.error('postToExtension error:', err);
@@ -459,20 +486,22 @@ export class WiaChatPanel {
                     .replace(/</g, '&lt;')
                     .replace(/>/g, '&gt;');
 
+                var bt = String.fromCharCode(96);
                 // Code blocks
-                html = html.replace(new RegExp('\\x60\\x60\\x60([a-zA-Z0-9_-]*)\\n([\\s\\S]*?)\\x60\\x60\\x60', 'g'), '<pre><code>$2</code></pre>');
+                var cbRegex = new RegExp(bt + '{3}([a-zA-Z0-9_-]*)[\\r\\n]([\\s\\S]*?)' + bt + '{3}', 'g');
+                html = html.replace(cbRegex, '<pre><code>$2</code></pre>');
                 // Inline code
-                html = html.replace(new RegExp('\\x60([^\\x60]+)\\x60', 'g'), '<code>$1</code>');
+                html = html.replace(new RegExp(bt + '([^' + bt + ']+)' + bt, 'g'), '<code>$1</code>');
                 // Bold
-                html = html.replace(/\\*\\*([^\\*]+)\\*\\*/g, '<b>$1</b>');
+                html = html.replace(new RegExp('\\*\\*([^\\*]+)\\*\\*', 'g'), '<b>$1</b>');
                 // Italics
-                html = html.replace(/\\*([^\\*]+)\\*/g, '<i>$1</i>');
+                html = html.replace(new RegExp('\\*([^\\*]+)\\*', 'g'), '<i>$1</i>');
                 // Headers
-                html = html.replace(/^### (.*$)/gim, '<h4 style="margin:8px 0 4px 0;">$1</h4>');
-                html = html.replace(/^## (.*$)/gim, '<h3 style="margin:10px 0 6px 0;">$1</h3>');
-                html = html.replace(/^# (.*$)/gim, '<h2 style="margin:12px 0 8px 0;">$1</h2>');
+                html = html.replace(new RegExp('^### (.*$)', 'gm'), '<h4 style="margin:8px 0 4px 0;">$1</h4>');
+                html = html.replace(new RegExp('^## (.*$)', 'gm'), '<h3 style="margin:10px 0 6px 0;">$1</h3>');
+                html = html.replace(new RegExp('^# (.*$)', 'gm'), '<h2 style="margin:12px 0 8px 0;">$1</h2>');
                 // Line breaks
-                html = html.replace(/\\n/g, '<br/>');
+                html = html.split(new RegExp('\\r?\\n')).join('<br/>');
                 return html;
             }
 
@@ -512,6 +541,32 @@ export class WiaChatPanel {
                 chat.scrollTop = chat.scrollHeight;
             }
 
+            function attachEventListeners() {
+                var btnSendChat = document.getElementById('btnSendChat');
+                if (btnSendChat) {
+                    btnSendChat.addEventListener('click', function(e) {
+                        e.preventDefault();
+                        sendMsg();
+                    });
+                }
+
+                var userInput = document.getElementById('userInput');
+                if (userInput) {
+                    userInput.addEventListener('keydown', function(e) {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                            e.preventDefault();
+                            sendMsg();
+                        }
+                    });
+                }
+            }
+
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', attachEventListeners);
+            } else {
+                attachEventListeners();
+            }
+
             // Document-wide delegated event handler
             document.addEventListener('click', function(e) {
                 var target = e.target;
@@ -528,7 +583,7 @@ export class WiaChatPanel {
                 var chip = target.closest('.chip');
                 if (chip) {
                     e.preventDefault();
-                    var text = chip.getAttribute('data-prompt') || chip.textContent.replace(/^[^\w]+/, '').trim();
+                    var text = chip.getAttribute('data-prompt') || chip.textContent.replace(new RegExp('^[^\\w]+'), '').trim();
                     sendPrompt(text);
                     return;
                 }
@@ -557,17 +612,7 @@ export class WiaChatPanel {
                     }
                     return;
                 }
-            });
-
-            var userInput = document.getElementById('userInput');
-            if (userInput) {
-                userInput.addEventListener('keydown', function(e) {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault();
-                        sendMsg();
-                    }
-                });
-            }
+            }, true);
 
             window.addEventListener('message', function(event) {
                 var msg = event.data;

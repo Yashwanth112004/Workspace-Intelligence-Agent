@@ -37,7 +37,11 @@ function activate(context) {
     }
     // Register WIA Agent Webview View Provider (Sidebar Interactive Agent & Chat)
     const agentViewProvider = new agentViewProvider_1.WiaAgentViewProvider(context.extensionUri, apiClient, secretStorage, layaEngine, executor, envRepair, currentRootPath);
-    context.subscriptions.push(vscode.window.registerWebviewViewProvider('wia-agent-view', agentViewProvider));
+    context.subscriptions.push(vscode.window.registerWebviewViewProvider('wia-agent-view', agentViewProvider, {
+        webviewOptions: {
+            retainContextWhenHidden: true
+        }
+    }));
     // Initialize Tree Providers with immediate workspace detection
     const archProvider = new architectureProvider_1.ArchitectureTreeProvider(apiClient);
     const symbolsProvider = new symbolsProvider_1.SymbolsTreeProvider(apiClient);
@@ -99,6 +103,7 @@ function activate(context) {
             symbolsProvider.setRepository(currentRepoId, currentRootPath);
             depsProvider.setRepository(currentRepoId, currentRootPath);
             codeLensProvider.setRepository(currentRepoId, currentRootPath);
+            agentViewProvider.setWorkspaceRoot(currentRootPath);
         }
     });
     const getActiveSymbolOrPrompt = async (promptTitle) => {
@@ -169,13 +174,13 @@ function activate(context) {
     });
     // 4. Architecture Map & Panels
     const archCmd = vscode.commands.registerCommand('wia.architecture', () => {
-        WiaArchitecturePanel_1.WiaArchitecturePanel.createOrShow(context.extensionUri, apiClient, currentRepoId, currentRootPath);
+        WiaArchitecturePanel_1.WiaArchitecturePanel.createOrShow(context.extensionUri, apiClient, currentRepoId, currentRootPath, executor);
     });
     const showArchPanelCmd = vscode.commands.registerCommand('wia.showArchitecturePanel', () => {
-        WiaArchitecturePanel_1.WiaArchitecturePanel.createOrShow(context.extensionUri, apiClient, currentRepoId, currentRootPath);
+        WiaArchitecturePanel_1.WiaArchitecturePanel.createOrShow(context.extensionUri, apiClient, currentRepoId, currentRootPath, executor);
     });
     const explainArchCmd = vscode.commands.registerCommand('wia.explainArchitecture', () => {
-        WiaArchitecturePanel_1.WiaArchitecturePanel.createOrShow(context.extensionUri, apiClient, currentRepoId, currentRootPath);
+        WiaArchitecturePanel_1.WiaArchitecturePanel.createOrShow(context.extensionUri, apiClient, currentRepoId, currentRootPath, executor);
     });
     // 5. Dependencies Analysis & Resolution
     const depsCmd = vscode.commands.registerCommand('wia.deps', async () => {
@@ -290,13 +295,13 @@ function activate(context) {
     // 14. Impact Analysis Panel & CodeLens Handlers
     const impactCmd = vscode.commands.registerCommand('wia.impact', async () => {
         const symbol = await getActiveSymbolOrPrompt('Enter symbol identifier to evaluate refactoring impact:');
-        WiaImpactPanel_1.WiaImpactPanel.createOrShow(context.extensionUri, apiClient, currentRepoId, currentRootPath, symbol);
+        WiaImpactPanel_1.WiaImpactPanel.createOrShow(context.extensionUri, apiClient, currentRepoId, currentRootPath, symbol, executor);
     });
     const showImpactPanelCmd = vscode.commands.registerCommand('wia.showImpactPanel', () => {
-        WiaImpactPanel_1.WiaImpactPanel.createOrShow(context.extensionUri, apiClient, currentRepoId, currentRootPath);
+        WiaImpactPanel_1.WiaImpactPanel.createOrShow(context.extensionUri, apiClient, currentRepoId, currentRootPath, undefined, executor);
     });
     const analyzeImpactForSymbolCmd = vscode.commands.registerCommand('wia.analyzeImpactForSymbol', (symbolName) => {
-        WiaImpactPanel_1.WiaImpactPanel.createOrShow(context.extensionUri, apiClient, currentRepoId, currentRootPath, symbolName);
+        WiaImpactPanel_1.WiaImpactPanel.createOrShow(context.extensionUri, apiClient, currentRepoId, currentRootPath, symbolName, executor);
     });
     // 15. Flow Trace & CodeLens Handlers
     const flowCmd = vscode.commands.registerCommand('wia.flow', async () => {

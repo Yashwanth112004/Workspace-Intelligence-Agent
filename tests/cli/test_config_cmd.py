@@ -17,6 +17,8 @@ def test_config_cmd_show(tmp_path: Path):
 def test_config_cmd_set_and_clear(tmp_path: Path, monkeypatch):
     test_config_path = tmp_path / "config.json"
     monkeypatch.setattr("wia.cli.commands.config_cmd.CONFIG_FILE_PATH", test_config_path)
+    for env_var in ("OPENROUTER_API_KEY", "NVIDIA_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY"):
+        monkeypatch.delenv(env_var, raising=False)
 
     runner = CliRunner()
 

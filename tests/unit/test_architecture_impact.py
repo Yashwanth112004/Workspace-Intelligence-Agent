@@ -128,6 +128,53 @@ def test_impact_analyzer_symbol_with_callers():
     assert "wia/cli/commands/status_cmd.py" in report.affected_files
 
 
+def test_impact_analyzer_isolated_symbol():
+    index = WorkspaceIndex(
+        workspace_path="/app",
+        files={
+            "wia/utils/helper.py": FileRecord(
+                "wia/utils/helper.py",
+                100,
+                1.0,
+                ".py",
+                language="Python",
+                indexing_status=IndexingStatus.INDEXED,
+                extra_metadata={
+                    "symbols": [
+                        {
+                            "name": "isolated_helper",
+                            "symbol_type": "function",
+                            "line_number": 10,
+                            "calls": [],
+                        }
+                    ]
+                },
+            ),
+            "wia/main.py": FileRecord(
+                "wia/main.py",
+                100,
+                1.0,
+                ".py",
+                language="Python",
+                indexing_status=IndexingStatus.INDEXED,
+                extra_metadata={"imports": ["wia.utils.helper"]},
+            ),
+        },
+    )
+
+    graph = WorkspaceGraph()
+    graph.build_from_index(index)
+
+    report = ImpactAnalyzer.analyze_symbol_impact("isolated_helper", index, graph)
+    assert report.found is True
+    assert report.target_symbol == "isolated_helper"
+    assert report.defining_file == "wia/utils/helper.py"
+    assert report.risk_level == "LOW"
+    assert len(report.direct_dependents) == 0
+    assert len(report.affected_files) == 0
+    assert "0 identified downstream callers" in report.explanation
+
+
 def test_impact_analyzer_file_target():
     index = WorkspaceIndex(
         workspace_path="/app",

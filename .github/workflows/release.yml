@@ -1,16 +1,16 @@
-name: Publish WIA to PyPI
+name: Release & Publish WIA
 
 on:
-  release:
-    types: [published]
   push:
     tags:
       - 'v*'
+  release:
+    types: [published]
   workflow_dispatch:
 
 jobs:
-  pypi-publish:
-    name: Build and publish Python distribution to PyPI
+  python-build-publish:
+    name: Build & Publish Python Package
     runs-on: ubuntu-latest
     permissions:
       id-token: write  # Mandatory for PyPI Trusted Publishing (OIDC)
@@ -27,13 +27,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Configure Git environment
-        run: |
-          git config --global --add safe.directory "*"
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-
-      - name: Install package & test dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
@@ -46,12 +40,102 @@ jobs:
         run: |
           python -m build
 
-      - name: Validate distribution metadata with twine check
+      - name: Validate distribution metadata
         run: |
           twine check dist/*
 
+      - name: Upload Python artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-dist
+          path: dist/
+
       - name: Publish distribution to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        continue-on-error: true
         with:
           packages-dir: dist/
           skip-existing: true
+
+  extension-build-publish:
+    name: Build & Publish VS Code Extension
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install extension dependencies
+        working-directory: ./vscode-extension
+        run: npm ci
+
+      - name: Compile extension
+        working-directory: ./vscode-extension
+        run: npm run compile
+
+      - name: Run extension tests
+        working-directory: ./vscode-extension
+        run: npm test
+
+      - name: Package VSIX
+        working-directory: ./vscode-extension
+        run: npx @vscode/vsce package --no-git-tag-version
+
+      - name: Upload VSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vsix-package
+          path: vscode-extension/*.vsix
+
+      - name: Publish to VS Code Marketplace
+        if: env.VSCE_PAT != ''
+        working-directory: ./vscode-extension
+        run: npx @vscode/vsce publish -p ${{ secrets.VSCE_PAT }} --no-git-tag-version
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+
+      - name: Publish to Open VSX Registry
+        if: env.OVSX_PAT != ''
+        working-directory: ./vscode-extension
+        run: npx ovsx publish -p ${{ secrets.OVSX_PAT }} --no-git-tag-version
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+
+  github-release:
+    name: Create GitHub Release
+    needs: [python-build-publish, extension-build-publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download Python artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: python-dist
+          path: dist/
+
+      - name: Download VSIX artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: vsix-package
+          path: vsix/
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            dist/*
+            vsix/*.vsix
+          generate_release_notes: true

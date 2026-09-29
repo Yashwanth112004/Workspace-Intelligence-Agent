@@ -2,7 +2,7 @@
   "name": "wia-agent",
   "displayName": "Workspace Intelligence Agent (WIA)",
   "description": "AI-Powered Code Intelligence, Architecture Map, Symbol Impact CodeLens, and Laya Decision Agent for VS Code",
-  "version": "0.1.7",
+  "version": "0.1.1",
   "publisher": "wia-agent",
   "engines": {
     "vscode": "^1.80.0"
@@ -29,7 +29,15 @@
     "url": "https://github.com/Yashwanth112004/Workspace-Intelligence-Agent.git"
   },
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "onView:wia-agent-view",
+    "onView:wia-architecture",
+    "onView:wia-symbols",
+    "onView:wia-dependencies",
+    "onCommand:wia.openAgent",
+    "onCommand:wia.openChat",
+    "onCommand:wia.showArchitecturePanel",
+    "onCommand:wia.showImpactPanel"
   ],
   "contributes": {
     "viewsContainers": {

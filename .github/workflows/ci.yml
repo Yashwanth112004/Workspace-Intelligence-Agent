@@ -7,8 +7,8 @@ on:
     branches: [ main ]
 
 jobs:
-  test:
-    name: Test on Python ${{ matrix.python-version }}
+  python-test:
+    name: Python ${{ matrix.python-version }} Tests
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -58,3 +58,32 @@ jobs:
       - name: Validate distribution packages
         run: |
           twine check dist/*
+
+  extension-test:
+    name: VS Code Extension Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install extension dependencies
+        working-directory: ./vscode-extension
+        run: npm ci
+
+      - name: Compile extension
+        working-directory: ./vscode-extension
+        run: npm run compile
+
+      - name: Run extension tests
+        working-directory: ./vscode-extension
+        run: npm test
+
+      - name: Package VSIX
+        working-directory: ./vscode-extension
+        run: npx @vscode/vsce package

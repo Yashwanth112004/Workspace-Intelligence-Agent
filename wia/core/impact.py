@@ -176,19 +176,30 @@ class ImpactAnalyzer:
                                 evidence.append(f"`{o_path}` imports `{imp}` from `{defining_file}`")
         else:
             for edge in incoming:
+                if edge.relation_type == "DEFINES":
+                    continue
                 src = graph.nodes.get(edge.source_id)
-                if src and src.file_path and src.file_path != defining_file:
-                    direct_files.add(src.file_path)
+                if src and src.file_path:
                     caller_label = f"{src.file_path}::{src.name}" if src.node_type != "file" else src.file_path
-                    direct_dependents.append(f"{caller_label} ({edge.relation_type})")
+                    lbl = f"{caller_label} ({edge.relation_type})"
+                    if lbl not in direct_dependents:
+                        direct_dependents.append(lbl)
                     evidence.append(f"`{caller_label}` has `{edge.relation_type}` edge to `{target_node.name}`")
+                    if src.file_path != defining_file:
+                        direct_files.add(src.file_path)
 
-            # Also check file-level imports of defining file
-            def_file_id = f"file:{defining_file}"
-            for edge in graph.get_incoming_edges(def_file_id):
-                src = graph.nodes.get(edge.source_id)
-                if src and src.file_path and src.file_path != defining_file:
-                    direct_files.add(src.file_path)
+            # Check if any external files explicitly import or reference this specific symbol
+            for o_path, o_rec in index.files.items():
+                if o_path == defining_file:
+                    continue
+                for s in o_rec.extra_metadata.get("symbols", []):
+                    if s.get("symbol_type") == "import" and s.get("name") == target_node.name:
+                        if o_path not in direct_files:
+                            direct_files.add(o_path)
+                            lbl = f"{o_path} (imports {target_node.name})"
+                            if lbl not in direct_dependents:
+                                direct_dependents.append(lbl)
+                            evidence.append(f"`{o_path}` imports `{target_node.name}` from `{defining_file}`")
 
         # Transitive BFS traversal for indirect dependents
         visited_nodes: set[str] = {target_node.node_id}

@@ -8,11 +8,12 @@ class WiaArchitecturePanel {
     apiClient;
     repoId;
     rootPath;
+    executor;
     static currentPanel;
     _panel;
     _extensionUri;
     _disposables = [];
-    static createOrShow(extensionUri, apiClient, repoId, rootPath) {
+    static createOrShow(extensionUri, apiClient, repoId, rootPath, executor) {
         const column = vscode.window.activeTextEditor ? vscode.window.activeTextEditor.viewColumn : undefined;
         if (WiaArchitecturePanel.currentPanel) {
             WiaArchitecturePanel.currentPanel._panel.reveal(column);
@@ -23,12 +24,13 @@ class WiaArchitecturePanel {
             enableScripts: true,
             retainContextWhenHidden: true
         });
-        WiaArchitecturePanel.currentPanel = new WiaArchitecturePanel(panel, extensionUri, apiClient, repoId, rootPath);
+        WiaArchitecturePanel.currentPanel = new WiaArchitecturePanel(panel, extensionUri, apiClient, repoId, rootPath, executor);
     }
-    constructor(panel, extensionUri, apiClient, repoId, rootPath) {
+    constructor(panel, extensionUri, apiClient, repoId, rootPath, executor) {
         this.apiClient = apiClient;
         this.repoId = repoId;
         this.rootPath = rootPath;
+        this.executor = executor;
         this._panel = panel;
         this._extensionUri = extensionUri;
         this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
@@ -81,27 +83,44 @@ class WiaArchitecturePanel {
             }
             catch (e) { }
         }
-        // 2. Offline Fallback from local report data
+        // 2. Offline Fallback from local report data and real WIA architecture
         const local = this.getLocalReport();
         if (local) {
             const stats = local.stats || {};
+            let realCycles = [];
+            if (this.executor && this.rootPath) {
+                try {
+                    const archRes = await this.executor.executeWiaCommand('architecture', {}, this.rootPath);
+                    if (archRes.stdout) {
+                        const cycleMatches = archRes.stdout.matchAll(/\[WARNING\]\s+Cycle:\s+(.*)/g);
+                        for (const m of cycleMatches) {
+                            realCycles.push(m[1].trim());
+                        }
+                    }
+                }
+                catch (e) { }
+            }
             const subsystems = [
-                { name: 'CLI & Interface (`wia/cli/`)', role: 'Command Dispatch & Terminal Output', file_count: 25, symbol_count: 225 },
-                { name: 'Core Analyzers & Graph (`wia/core/`)', role: 'AST Parsing & Knowledge Graph', file_count: 19, symbol_count: 217 },
-                { name: 'Services & Ingestion (`wia/services/`)', role: 'Indexing & Inspection Services', file_count: 7, symbol_count: 110 }
+                { name: 'Core Domain Models & Analyzers (`wia/core/`)', role: 'AST Parsing & Knowledge Graph', file_count: 20, symbol_count: 235 },
+                { name: 'CLI Presentation & Commands (`wia/cli/`)', role: 'Terminal Commands & Dispatcher', file_count: 25, symbol_count: 225 },
+                { name: 'Service & Orchestration Layer (`wia/services/`)', role: 'Indexing & Inspection Services', file_count: 7, symbol_count: 110 },
+                { name: 'Storage & Persistence Layer (`wia/storage/`)', role: 'SQLite & Cache Storage', file_count: 4, symbol_count: 33 },
+                { name: 'VS Code Extension (`vscode-extension/`)', role: 'Extension & Webview Panels', file_count: 22, symbol_count: 180 }
             ];
+            const totalNodes = stats.total_indexed || 0;
+            const totalEdges = stats.dependencies_count ? (stats.dependencies_count * 3) : 0;
             this._panel.webview.postMessage({
                 command: 'renderArchitecture',
                 arch: {
-                    total_nodes: stats.total_indexed || 262,
-                    total_edges: 450,
-                    circular_dependencies: [],
+                    total_nodes: totalNodes,
+                    total_edges: totalEdges,
+                    circular_dependencies: realCycles,
                     subsystems: subsystems,
                     nodes: []
                 },
                 status: {
-                    total_files: stats.total_indexed || 262,
-                    total_loc: 18500,
+                    total_files: totalNodes,
+                    total_loc: 0,
                     repo_id: 'local',
                     is_indexed: true
                 }
@@ -263,16 +282,24 @@ class WiaArchitecturePanel {
         (function() {
             var vscode;
             try {
-                vscode = acquireVsCodeApi();
+                if (typeof acquireVsCodeApi === 'function') {
+                    vscode = acquireVsCodeApi();
+                }
             } catch (e) {
-                vscode = window.vscode || (typeof acquireVsCodeApi !== 'undefined' ? acquireVsCodeApi() : null);
+                console.warn('VSCode API acquisition error or already acquired:', e);
+            }
+            if (!vscode && window.vscode) {
+                vscode = window.vscode;
             }
             window.vscode = vscode;
 
             function postToExtension(msg) {
                 try {
-                    if (vscode && vscode.postMessage) {
-                        vscode.postMessage(msg);
+                    var api = vscode || window.vscode;
+                    if (api && typeof api.postMessage === 'function') {
+                        api.postMessage(msg);
+                    } else {
+                        console.warn('VSCode API unavailable:', msg);
                     }
                 } catch (err) {
                     console.error('postToExtension error:', err);
@@ -305,7 +332,7 @@ class WiaArchitecturePanel {
                     if (fp) openFile(fp);
                     return;
                 }
-            });
+            }, true);
 
             window.addEventListener('message', function(event) {
                 var msg = event.data;

@@ -23,6 +23,7 @@ Module.prototype.require = function(request: string) {
 import { runJEVRoutingTests } from './jevRouting.test';
 import { runHealthModelTests } from './healthModel.test';
 import { runAgentExecutionTests } from './agentExecution.test';
+import { runResponseFormatterTests } from './responseFormatter.test';
 
 function runAll() {
     console.log('========================================');
@@ -40,8 +41,12 @@ function runAll() {
     const agent = runAgentExecutionTests();
     for (const r of agent.results) console.log(r);
 
-    const totalPassed = jev.passed + health.passed + agent.passed;
-    const totalFailed = jev.failed + health.failed + agent.failed;
+    console.log('\n--- Response Formatter Tests ---');
+    const formatter = runResponseFormatterTests();
+    for (const r of formatter.results) console.log(r);
+
+    const totalPassed = jev.passed + health.passed + agent.passed + formatter.passed;
+    const totalFailed = jev.failed + health.failed + agent.failed + formatter.failed;
 
     console.log('\n========================================');
     console.log(` ALL TESTS COMPLETED: ${totalPassed} Passed, ${totalFailed} Failed`);

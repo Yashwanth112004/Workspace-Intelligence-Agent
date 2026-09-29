@@ -251,7 +251,14 @@ export class WiaExecutor {
 
         switch (command) {
             case 'ask':
-                cliArgs.push('ask', args.query || args.question || 'Explain this project', '-w', workspaceRoot);
+                cliArgs.push('ask', args.query || args.question || '', '-w', workspaceRoot);
+                if (args.apiKey) {
+                    cliArgs.push('--api-key', String(args.apiKey));
+                    if (args.provider) cliArgs.push('--provider', String(args.provider));
+                    if (args.model) cliArgs.push('--model', String(args.model));
+                } else {
+                    cliArgs.push('--offline');
+                }
                 break;
             case 'architecture':
                 cliArgs.push('architecture', '-w', workspaceRoot);

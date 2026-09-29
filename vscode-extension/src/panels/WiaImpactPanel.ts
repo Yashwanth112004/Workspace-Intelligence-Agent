@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import { WiaApiClient, ImpactResponse } from '../apiClient';
+import { WiaExecutor } from '../executor/wiaExecutor';
 
 export class WiaImpactPanel {
     public static currentPanel: WiaImpactPanel | undefined;
@@ -14,7 +15,8 @@ export class WiaImpactPanel {
         apiClient: WiaApiClient,
         repoId: string | null,
         rootPath: string | null,
-        targetSymbol?: string
+        targetSymbol?: string,
+        executor?: WiaExecutor
     ) {
         const column = vscode.window.activeTextEditor ? vscode.window.activeTextEditor.viewColumn : undefined;
 
@@ -36,7 +38,7 @@ export class WiaImpactPanel {
             }
         );
 
-        WiaImpactPanel.currentPanel = new WiaImpactPanel(panel, extensionUri, apiClient, repoId, rootPath, targetSymbol);
+        WiaImpactPanel.currentPanel = new WiaImpactPanel(panel, extensionUri, apiClient, repoId, rootPath, targetSymbol, executor);
     }
 
     private constructor(
@@ -45,7 +47,8 @@ export class WiaImpactPanel {
         private apiClient: WiaApiClient,
         private repoId: string | null,
         private rootPath: string | null,
-        initialTarget?: string
+        initialTarget?: string,
+        private executor?: WiaExecutor
     ) {
         this._panel = panel;
         this._extensionUri = extensionUri;
@@ -110,11 +113,16 @@ export class WiaImpactPanel {
                         }
                     }
 
+                    const risk = callers.length > 10 ? 'HIGH' : (callers.length > 3 ? 'MEDIUM' : 'LOW');
+                    const explanation = callers.length === 0
+                        ? `Evidence indicates isolated impact with 0 identified downstream callers or referencing files.`
+                        : `Symbol '${target}' is referenced by ${callers.length} downstream caller(s) across ${dependentFiles.size} file(s).`;
+
                     return {
                         repo_id: 'local',
                         target: target,
                         target_type: targetDef?.symbol_type || 'symbol',
-                        risk_level: callers.length > 10 ? 'HIGH' : (callers.length > 3 ? 'MEDIUM' : 'LOW'),
+                        risk_level: risk,
                         direct_impact_count: callers.length,
                         direct_impacts: callers.map(c => ({
                             name: c.symbol,
@@ -124,7 +132,7 @@ export class WiaImpactPanel {
                         })),
                         affected_files_count: dependentFiles.size,
                         affected_files: Array.from(dependentFiles),
-                        explanation: `Symbol '${target}' is referenced by ${callers.length} downstream caller(s) across ${dependentFiles.size} file(s).`
+                        explanation: explanation
                     };
                 } catch (e) {}
             }
@@ -148,7 +156,125 @@ export class WiaImpactPanel {
             } catch (e: any) {}
         }
 
-        // 2. Offline Fallback from index.json
+        // 2. Real WIA CLI Impact Execution via Executor
+        if (this.executor && this.rootPath) {
+            try {
+                const res = await this.executor.executeWiaCommand('impact', { symbol: target }, this.rootPath);
+                
+                // Try JSON parsing first
+                let parsedJson: any = null;
+                if (res.stdout) {
+                    try {
+                        const trimmed = res.stdout.trim();
+                        if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+                            parsedJson = JSON.parse(trimmed);
+                        }
+                    } catch (e) {}
+                }
+
+                if (parsedJson && (parsedJson.target_symbol || parsedJson.target)) {
+                    const directDeps: any[] = parsedJson.direct_dependents || [];
+                    const affectedFiles: string[] = parsedJson.affected_files || [];
+                    const risk = (parsedJson.risk_level || 'LOW').toUpperCase() as 'HIGH' | 'MEDIUM' | 'LOW';
+                    const structuredImpact: ImpactResponse = {
+                        repo_id: 'local',
+                        target: target,
+                        target_type: parsedJson.target_type || 'symbol',
+                        risk_level: risk,
+                        direct_impact_count: directDeps.length,
+                        direct_impacts: directDeps.map((c: string) => {
+                            const clean = c.replace(/\s*\([^)]*\)$/, '').trim();
+                            const parts = clean.split('::');
+                            return {
+                                name: parts[1] || parts[0],
+                                symbol_type: 'function',
+                                file_path: parts[0].trim(),
+                                line: 1
+                            };
+                        }),
+                        affected_files_count: affectedFiles.length,
+                        affected_files: affectedFiles,
+                        explanation: parsedJson.explanation || `Evaluated impact for '${target}' across workspace knowledge graph.`
+                    };
+
+                    this._panel.webview.postMessage({
+                        command: 'renderImpact',
+                        data: structuredImpact,
+                        target: target
+                    });
+                    return;
+                }
+
+                if (res.stdout && (res.stdout.includes('Target Entity:') || res.stdout.includes("Impact Analysis for '"))) {
+                    const text = res.stdout;
+                    
+                    const riskMatch = text.match(/Risk Classification:\s*(HIGH|MEDIUM|LOW)/i);
+                    const risk = (riskMatch ? riskMatch[1].toUpperCase() : 'LOW') as 'HIGH' | 'MEDIUM' | 'LOW';
+
+                    const explMatch = text.match(/Explanation:\s*([\s\S]*?)(?=\r?\n\r?\n|\r?\n===|$)/);
+                    const explanation = explMatch ? explMatch[1].trim() : '';
+
+                    const targetTypeMatch = text.match(/Target Type:\s*(.*)/);
+                    const targetType = targetTypeMatch ? targetTypeMatch[1].trim() : 'symbol';
+
+                    function parseSection(headerRegex: RegExp): string[] {
+                        const m = text.match(headerRegex);
+                        if (!m) return [];
+                        const lines = m[1].split(new RegExp('\\r?\\n'));
+                        const items: string[] = [];
+                        for (const line of lines) {
+                            const trimmed = line.trim();
+                            if (trimmed.startsWith('*') || trimmed.startsWith('-')) {
+                                const item = trimmed.replace(/^[\*\-]\s*/, '').trim();
+                                if (item && !item.toLowerCase().startsWith('no ') && !item.includes('additional consuming modules') && !item.includes('additional affected files')) {
+                                    items.push(item);
+                                }
+                            }
+                        }
+                        return items;
+                    }
+
+                    const callersHeaderCountMatch = text.match(/===\s*(?:Direct Symbol Callers|File-Level Dependents)\s*\((\d+)[^)]*\)\s*===/i);
+                    const affectedHeaderCountMatch = text.match(/===\s*Affected Files\s*\((\d+)\)\s*===/i);
+
+                    const callers = parseSection(/(?:=== Direct Symbol Callers[^=]*===|=== File-Level Dependents[^=]*===|Direct Symbol Callers:|File-Level Dependents[^:\n]*:)\s*([\s\S]*?)(?=\r?\n===|\r?\n[A-Z][a-zA-Z\s\-]+(?:\(\d+\))?:|$)/);
+                    const affected = parseSection(/(?:=== Affected Files[^=]*===|Affected Files[^:\n]*:)\s*([\s\S]*?)(?=\r?\n===|\r?\n[A-Z][a-zA-Z\s\-]+(?:\(\d+\))?:|$)/);
+
+                    const directCount = callersHeaderCountMatch ? parseInt(callersHeaderCountMatch[1], 10) : callers.length;
+                    const affectedCount = affectedHeaderCountMatch ? parseInt(affectedHeaderCountMatch[1], 10) : affected.length;
+
+                    const structuredImpact: ImpactResponse = {
+                        repo_id: 'local',
+                        target: target,
+                        target_type: targetType,
+                        risk_level: risk,
+                        direct_impact_count: directCount,
+                        direct_impacts: callers.map(c => {
+                            const clean = c.replace(/\s*\(.*\)$/, '').trim();
+                            const parts = clean.split('::');
+                            return {
+                                name: parts[1] || parts[0],
+                                symbol_type: 'function',
+                                file_path: parts[0].trim(),
+                                line: 1
+                            };
+                        }),
+                        affected_files_count: affectedCount,
+                        affected_files: affected,
+                        explanation: explanation || `Evaluated impact for '${target}' across workspace knowledge graph.`
+                    };
+
+                    this._panel.webview.postMessage({
+                        command: 'renderImpact',
+                        data: structuredImpact,
+                        target: target
+                    });
+                    return;
+                }
+            } catch (cliErr) {}
+        }
+
+        // 3. Fallback from index.json
         const local = this.getLocalSymbolImpact(target);
         if (local) {
             this._panel.webview.postMessage({
@@ -161,7 +287,7 @@ export class WiaImpactPanel {
 
         this._panel.webview.postMessage({
             command: 'showError',
-            message: `No active repository indexed or symbol '${target}' not found. Run "WIA: Scan Workspace" first.`
+            message: `Symbol '${target}' not found in index. Run "WIA: Scan Workspace" first.`
         });
     }
 
@@ -392,16 +518,24 @@ export class WiaImpactPanel {
         (function() {
             var vscode;
             try {
-                vscode = acquireVsCodeApi();
+                if (typeof acquireVsCodeApi === 'function') {
+                    vscode = acquireVsCodeApi();
+                }
             } catch (e) {
-                vscode = window.vscode || (typeof acquireVsCodeApi !== 'undefined' ? acquireVsCodeApi() : null);
+                console.warn('VSCode API acquisition error or already acquired:', e);
+            }
+            if (!vscode && window.vscode) {
+                vscode = window.vscode;
             }
             window.vscode = vscode;
 
             function postToExtension(msg) {
                 try {
-                    if (vscode && vscode.postMessage) {
-                        vscode.postMessage(msg);
+                    var api = vscode || window.vscode;
+                    if (api && typeof api.postMessage === 'function') {
+                        api.postMessage(msg);
+                    } else {
+                        console.warn('VSCode API unavailable:', msg);
                     }
                 } catch (err) {
                     console.error('postToExtension error:', err);
@@ -422,6 +556,32 @@ export class WiaImpactPanel {
 
             function traceFlow(symbol) {
                 postToExtension({ command: 'traceFlow', symbol: symbol });
+            }
+
+            function attachEventListeners() {
+                var btnAnalyze = document.getElementById('btnAnalyze');
+                if (btnAnalyze) {
+                    btnAnalyze.addEventListener('click', function(e) {
+                        e.preventDefault();
+                        searchTarget();
+                    });
+                }
+
+                var targetInput = document.getElementById('targetInput');
+                if (targetInput) {
+                    targetInput.addEventListener('keydown', function(e) {
+                        if (e.key === 'Enter') {
+                            e.preventDefault();
+                            searchTarget();
+                        }
+                    });
+                }
+            }
+
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', attachEventListeners);
+            } else {
+                attachEventListeners();
             }
 
             // Global event delegation
@@ -451,17 +611,7 @@ export class WiaImpactPanel {
                     if (sym) traceFlow(sym);
                     return;
                 }
-            });
-
-            var targetInput = document.getElementById('targetInput');
-            if (targetInput) {
-                targetInput.addEventListener('keydown', function(e) {
-                    if (e.key === 'Enter') {
-                        e.preventDefault();
-                        searchTarget();
-                    }
-                });
-            }
+            }, true);
 
             window.addEventListener('message', function(event) {
                 var msg = event.data;
