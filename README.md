@@ -625,8 +625,7 @@ npx @vscode/vsce package
 
 ---
 
-## 📄 License & Credits
 
-Distributed under the **Apache License 2.0**. See [`LICENSE`](LICENSE) for complete terms.
+
 
 Developed and maintained by **[Yashwanth](https://github.com/Yashwanth112004)**. Contributions and issues are welcome on [GitHub](https://github.com/Yashwanth112004/Workspace-Intelligence-Agent).
