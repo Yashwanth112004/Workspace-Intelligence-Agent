@@ -1,7 +1,7 @@
 # WIA — Workspace Intelligence Agent
 
 [![Python Version](https://img.shields.io/badge/Python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
-[![PyPI Version](https://img.shields.io/badge/PyPI-wia--agent%20v0.1.7-blue.svg?logo=pypi&logoColor=white)](https://pypi.org/project/wia-agent/)
+[![PyPI Version](https://img.shields.io/badge/PyPI-wia--agent%20v0.1.8-blue.svg?logo=pypi&logoColor=white)](https://pypi.org/project/wia-agent/)
 [![VS Code Extension](https://img.shields.io/badge/VS%20Code-v0.1.1-007ACC.svg?logo=visualstudiocode&logoColor=white)](https://marketplace.visualstudio.com/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-green.svg)](LICENSE)
 [![Core Test Suite](https://img.shields.io/badge/Pytest-200%20Passed-brightgreen.svg?logo=pytest&logoColor=white)](#-verification--testing)

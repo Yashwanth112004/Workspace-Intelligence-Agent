@@ -3,6 +3,7 @@
 import html
 import json
 from pathlib import Path
+from typing import Any
 from wia.analyzers.dependency.conflict_detector import ConflictDetector
 from wia.analyzers.dependency.manifest_parser import ManifestParser
 from wia.analyzers.git.git_analyzer import GitAnalyzer
@@ -12,12 +13,25 @@ from wia.knowledge.graph import WorkspaceGraph
 from wia.services.explanation_service import ExplanationService
 
 
+def _safe_json_embed(obj: Any) -> str:
+    """Safely serialize data to JSON for embedding inside HTML <script> tags."""
+    raw = json.dumps(obj, default=str)
+    # Prevent premature script tag termination and HTML injection
+    return raw.replace("</script>", r"<\/script>").replace("<!--", r"<\!--")
+
+
 class ReportGenerator:
     """Generates clean, developer-focused, batch-accumulating workspace intelligence narrative reports."""
 
     @classmethod
     def export_report_json(
-        cls, index: WorkspaceIndex, output_path: str | Path | None = None
+        cls,
+        index: WorkspaceIndex,
+        output_path: str | Path | None = None,
+        files_data: list[dict] | None = None,
+        deps: list | None = None,
+        git_hotspots: list | None = None,
+        security_findings: list | None = None,
     ) -> Path:
         """Export structured workspace intelligence payload to JSON sidecar file."""
         ws_path = Path(index.workspace_path).resolve()
@@ -28,19 +42,22 @@ class ReportGenerator:
         )
         target.parent.mkdir(parents=True, exist_ok=True)
 
-        graph = WorkspaceGraph()
-        graph.build_from_index(index)
+        if files_data is None:
+            graph = WorkspaceGraph()
+            graph.build_from_index(index)
+            files_data = []
+            for rel_path, rec in index.files.items():
+                if rec.indexing_status != "INDEXED":
+                    continue
+                expl = ExplanationService.explain_file_structured(rel_path, index, graph)
+                files_data.append(expl)
 
-        files_data = []
-        for rel_path, rec in index.files.items():
-            if rec.indexing_status != "INDEXED":
-                continue
-            expl = ExplanationService.explain_file_structured(rel_path, index, graph)
-            files_data.append(expl)
-
-        deps = ManifestParser.parse_workspace_manifests(ws_path)
-        git_hotspots = GitAnalyzer.get_file_hotspots(ws_path, top_n=15)
-        security_findings = SecretScanner.scan_workspace(ws_path)
+        if deps is None:
+            deps = ManifestParser.parse_workspace_manifests(ws_path)
+        if git_hotspots is None:
+            git_hotspots = GitAnalyzer.get_file_hotspots(ws_path, top_n=15)
+        if security_findings is None:
+            security_findings = SecretScanner.scan_workspace(ws_path)
 
         payload = {
             "workspace_name": ws_path.name,
@@ -64,6 +81,453 @@ class ReportGenerator:
         return target
 
     @classmethod
+    def _detect_project_commands(
+        cls, ws_path: Path, index: WorkspaceIndex, files_data: list[dict]
+    ) -> list[dict]:
+        """Detect runnable developer commands (install, run, test, build, lint) from workspace manifests."""
+        cmds: list[dict] = []
+        seen_cmds: set[str] = set()
+
+        def add_cmd(category: str, desc: str, cmd: str, source: str = ""):
+            if cmd and cmd not in seen_cmds:
+                seen_cmds.add(cmd)
+                cmds.append({
+                    "category": category,
+                    "desc": desc,
+                    "command": cmd,
+                    "source": source,
+                })
+
+        # 1. Node / TypeScript ecosystem
+        pkg_candidates = [
+            ws_path / "package.json",
+            ws_path / "vscode-extension" / "package.json",
+            ws_path / "frontend" / "package.json",
+            ws_path / "client" / "package.json",
+            ws_path / "web" / "package.json",
+            ws_path / "ui" / "package.json",
+        ]
+        for pkg_candidate in pkg_candidates:
+            if pkg_candidate.exists():
+                try:
+                    pkg_data = json.loads(pkg_candidate.read_text(encoding="utf-8", errors="ignore"))
+                    rel_dir = pkg_candidate.parent.relative_to(ws_path)
+                    prefix = f"cd {rel_dir} && " if str(rel_dir) != "." else ""
+                    pkg_name = pkg_data.get("name") or (str(rel_dir) if str(rel_dir) != "." else ws_path.name)
+                    pm = (
+                        "pnpm" if (pkg_candidate.parent / "pnpm-lock.yaml").exists()
+                        else "yarn" if (pkg_candidate.parent / "yarn.lock").exists()
+                        else "bun" if (pkg_candidate.parent / "bun.lockb").exists() or (pkg_candidate.parent / "bun.lock").exists()
+                        else "npm"
+                    )
+
+                    scripts = pkg_data.get("scripts", {})
+                    add_cmd("Installation & Setup", f"Install {pkg_name} dependencies ({pm}):", f"{prefix}{pm} install", str(pkg_candidate.relative_to(ws_path)))
+
+                    if "dev" in scripts:
+                        add_cmd("Run & Development", f"Launch {pkg_name} development server:", f"{prefix}{pm} run dev", str(pkg_candidate.relative_to(ws_path)))
+                    elif "start" in scripts:
+                        add_cmd("Run & Development", f"Start {pkg_name} application:", f"{prefix}{pm} start", str(pkg_candidate.relative_to(ws_path)))
+
+                    if "build" in scripts:
+                        add_cmd("Build & Bundle", f"Build {pkg_name} production bundle:", f"{prefix}{pm} run build", str(pkg_candidate.relative_to(ws_path)))
+                    elif "compile" in scripts:
+                        add_cmd("Build & Bundle", f"Compile TypeScript / assets for {pkg_name}:", f"{prefix}{pm} run compile", str(pkg_candidate.relative_to(ws_path)))
+
+                    if "test" in scripts:
+                        add_cmd("Testing & Verification", f"Run {pkg_name} automated test suite:", f"{prefix}{pm} test", str(pkg_candidate.relative_to(ws_path)))
+                    if "lint" in scripts:
+                        add_cmd("Code Quality & Linting", f"Run linter checks for {pkg_name}:", f"{prefix}{pm} run lint", str(pkg_candidate.relative_to(ws_path)))
+                    if "format" in scripts:
+                        add_cmd("Code Quality & Linting", f"Format source code for {pkg_name}:", f"{prefix}{pm} run format", str(pkg_candidate.relative_to(ws_path)))
+                except Exception:
+                    pass
+
+        # 2. Python ecosystem
+        pyproject_path = ws_path / "pyproject.toml"
+        setup_py_path = ws_path / "setup.py"
+        req_txt_path = ws_path / "requirements.txt"
+        poetry_lock = ws_path / "poetry.lock"
+        pipfile = ws_path / "Pipfile"
+
+        if pyproject_path.exists() or setup_py_path.exists():
+            add_cmd("Installation & Setup", "Install Python package in editable development mode:", "pip install -e .", "pyproject.toml" if pyproject_path.exists() else "setup.py")
+        elif poetry_lock.exists():
+            add_cmd("Installation & Setup", "Install project dependencies using Poetry:", "poetry install", "poetry.lock")
+        elif pipfile.exists():
+            add_cmd("Installation & Setup", "Install dependencies with Pipenv:", "pipenv install --dev", "Pipfile")
+        elif req_txt_path.exists():
+            add_cmd("Installation & Setup", "Install Python dependencies from requirements file:", "pip install -r requirements.txt", "requirements.txt")
+
+        # 3. Python Runtime / Execution entry points
+        if (ws_path / "run_dev.py").exists():
+            add_cmd("Run & Development", "Start local development runner / backend daemon:", "python run_dev.py", "run_dev.py")
+        elif (ws_path / "manage.py").exists() or "Django" in index.frameworks:
+            add_cmd("Run & Development", "Launch Django development server:", "python manage.py runserver", "manage.py")
+        elif (ws_path / "backend" / "app" / "main.py").exists():
+            add_cmd("Run & Development", "Launch FastAPI application server with hot-reload:", "uvicorn backend.app.main:app --reload --port 8000", "backend/app/main.py")
+        elif "FastAPI" in index.frameworks:
+            add_cmd("Run & Development", "Launch FastAPI application server:", "uvicorn app.main:app --reload --port 8000", "app/main.py")
+        elif "Flask" in index.frameworks:
+            add_cmd("Run & Development", "Launch Flask development server:", "flask run", "Flask")
+        elif (ws_path / "app.py").exists():
+            add_cmd("Run & Development", "Execute application entrypoint:", "python app.py", "app.py")
+        elif (ws_path / "main.py").exists():
+            add_cmd("Run & Development", "Execute main entrypoint script:", "python main.py", "main.py")
+        elif (ws_path / "run.py").exists():
+            add_cmd("Run & Development", "Execute project runtime runner:", "python run.py", "run.py")
+
+        # 4. Python Testing
+        test_files = [f["file_path"] for f in files_data if "test" in f["file_path"].lower()]
+        if (ws_path / "tests").exists() or (ws_path / "pytest.ini").exists() or any(test_files):
+            add_cmd("Testing & Verification", "Run unit and integration test suite with Pytest:", "pytest -v", "tests/")
+
+        # 5. Rust ecosystem
+        if (ws_path / "Cargo.toml").exists():
+            add_cmd("Installation & Setup", "Fetch Rust dependencies via Cargo:", "cargo fetch", "Cargo.toml")
+            add_cmd("Run & Development", "Run Rust binary executable:", "cargo run", "Cargo.toml")
+            add_cmd("Build & Bundle", "Compile optimized release binary:", "cargo build --release", "Cargo.toml")
+            add_cmd("Testing & Verification", "Execute Rust cargo test suite:", "cargo test", "Cargo.toml")
+            add_cmd("Code Quality & Linting", "Run Clippy linter checks:", "cargo clippy", "Cargo.toml")
+
+        # 6. Go ecosystem
+        if (ws_path / "go.mod").exists():
+            add_cmd("Installation & Setup", "Download Go module dependencies:", "go mod download", "go.mod")
+            add_cmd("Run & Development", "Run main Go application:", "go run .", "go.mod")
+            add_cmd("Testing & Verification", "Run all Go package tests:", "go test ./...", "go.mod")
+            add_cmd("Build & Bundle", "Build Go project binaries:", "go build ./...", "go.mod")
+
+        # 7. Makefile targets
+        makefile_path = ws_path / "Makefile"
+        if makefile_path.exists():
+            try:
+                lines = makefile_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+                for line in lines:
+                    if line and not line.startswith(("#", "\t", " ")) and ":" in line:
+                        target = line.split(":")[0].strip()
+                        if target in ("all", "build", "test", "dev", "run", "lint", "start", "clean", "docker"):
+                            add_cmd("Makefile Workflow", f"Execute Makefile '{target}' target:", f"make {target}", "Makefile")
+            except Exception:
+                pass
+
+        # 8. Docker / Containerization
+        if (ws_path / "docker-compose.yml").exists() or (ws_path / "compose.yaml").exists():
+            add_cmd("Containerization", "Launch multi-container services with Docker Compose:", "docker compose up --build", "docker-compose.yml")
+        elif (ws_path / "Dockerfile").exists():
+            add_cmd("Containerization", f"Build container image for {ws_path.name.lower()}:", f"docker build -t {ws_path.name.lower()} .", "Dockerfile")
+
+        # 9. Fallback if no specific manifests were detected
+        if not cmds:
+            add_cmd("Run & Development", "Inspect workspace structure and files:", "ls -la", "workspace")
+
+        return cmds
+
+    @classmethod
+    def _build_graph_payload(
+        cls,
+        index: WorkspaceIndex,
+        graph: WorkspaceGraph | None = None,
+        files_data: list[dict] | None = None,
+        deps: list | None = None,
+        conflicts: list | None = None,
+    ) -> dict:
+        """Construct a comprehensive graph payload with visualization ranking and cycle detection.
+
+        NOTE: 'vis_rank' (0 to 4+) and 'vis_score' are computed strictly for UI layout
+        hierarchy and visual density management. They are completely separate from WIA's
+        semantic impact analysis and security risk calculations.
+        """
+        if graph is None:
+            graph = WorkspaceGraph()
+            graph.build_from_index(index)
+        if files_data is None:
+            files_data = []
+        if deps is None:
+            deps = []
+        if conflicts is None:
+            conflicts = []
+
+        file_meta_map = {f["file_path"]: f for f in files_data}
+        conflict_pkg_map = {c.package_name.lower(): c for c in conflicts}
+
+        nodes_list: list[dict] = []
+        edges_list: list[dict] = []
+        node_id_set: set[str] = set()
+
+        def add_node(nid: str, ntype: str, label: str, file_p: str = "", extra: dict | None = None):
+            if nid in node_id_set:
+                return
+            node_id_set.add(nid)
+            meta = extra or {}
+            nodes_list.append({
+                "id": nid,
+                "type": ntype,
+                "label": label,
+                "file_path": file_p,
+                "metadata": meta,
+            })
+
+        # 1. Identify Target / Primary Entrypoints
+        entry_paths = {
+            f["file_path"] for f in files_data
+            if any(k in f.get("role", "").lower() for k in ("entry", "cli", "main", "app", "server", "controller", "router"))
+        }
+        if not entry_paths and files_data:
+            entry_paths = {files_data[0]["file_path"]}
+
+        # 2. Add File Nodes from indexed files
+        for rel_p, rec in index.files.items():
+            if rec.indexing_status != "INDEXED":
+                continue
+            fid = f"file:{rel_p}"
+            fmeta = file_meta_map.get(rel_p, {})
+            is_target = rel_p in entry_paths
+            add_node(
+                nid=fid,
+                ntype="file",
+                label=Path(rel_p).name,
+                file_p=rel_p,
+                extra={
+                    "is_target": is_target,
+                    "language": rec.language,
+                    "role": fmeta.get("role", "Component"),
+                    "purpose": fmeta.get("purpose", ""),
+                    "risk": fmeta.get("impact_risk_level", "LOW"),
+                    "risk_explanation": fmeta.get("impact_explanation", ""),
+                    "symbol_count": len(rec.extra_metadata.get("symbols", [])),
+                    "symbols": [
+                        {"name": s.get("name", ""), "type": s.get("symbol_type", "symbol"), "line": s.get("line_number", 0), "doc": s.get("docstring", "")}
+                        for s in rec.extra_metadata.get("symbols", []) if s.get("symbol_type") != "import"
+                    ],
+                    "direct_dependents": fmeta.get("impact_direct_dependents", []),
+                },
+            )
+
+        # 3. Add Symbol Nodes and graph knowledge entities
+        for g_nid, g_node in graph.nodes.items():
+            if g_nid.startswith("file:"):
+                continue  # already added
+            ntype = g_node.node_type
+            fpath = g_node.file_path
+            fmeta = file_meta_map.get(fpath, {})
+            add_node(
+                nid=g_nid,
+                ntype=ntype,
+                label=g_node.name,
+                file_p=fpath,
+                extra={
+                    "is_target": False,
+                    "line_number": g_node.metadata.get("line_number", 0),
+                    "parent_file": fpath,
+                    "role": fmeta.get("role", ""),
+                    "risk": fmeta.get("impact_risk_level", "LOW"),
+                },
+            )
+
+        # 4. Add Manifest and External Package Nodes
+        for d in deps:
+            pkg_name = getattr(d, "name", getattr(d, "package_name", ""))
+            m_path = getattr(d, "manifest_path", "manifest")
+            eco = getattr(d, "ecosystem", "generic")
+            dtype = getattr(d, "dependency_type", "runtime")
+            has_conf = pkg_name.lower() in conflict_pkg_map
+            conf_obj = conflict_pkg_map.get(pkg_name.lower())
+
+            m_id = f"manifest:{m_path}"
+            add_node(m_id, ntype="manifest", label=Path(m_path).name, file_p=m_path, extra={"is_target": False, "ecosystem": eco})
+
+            pkg_id = f"pkg:{m_path}:{pkg_name}"
+            add_node(
+                pkg_id,
+                ntype="package",
+                label=pkg_name,
+                file_p=m_path,
+                extra={
+                    "is_target": False,
+                    "version": getattr(d, "version_spec", getattr(d, "specifier", "*")),
+                    "ecosystem": eco,
+                    "dep_type": dtype,
+                    "has_conflict": has_conf,
+                    "conflict_reason": conf_obj.reason if conf_obj else "",
+                },
+            )
+
+        # 5. Populate Graph Edges from WorkspaceGraph
+        for edge in graph.edges:
+            src = edge.source_id
+            tgt = edge.target_id
+            rel = edge.relation_type
+            if src in node_id_set and tgt in node_id_set:
+                edges_list.append({
+                    "source": src,
+                    "target": tgt,
+                    "relation": rel,
+                    "confidence": edge.confidence,
+                    "metadata": edge.metadata or {},
+                })
+
+        # 6. Add Manifest -> Package DEPENDS_ON edges
+        for d in deps:
+            pkg_name = getattr(d, "name", getattr(d, "package_name", ""))
+            m_path = getattr(d, "manifest_path", "manifest")
+            m_id = f"manifest:{m_path}"
+            pkg_id = f"pkg:{m_path}:{pkg_name}"
+            if m_id in node_id_set and pkg_id in node_id_set:
+                edges_list.append({
+                    "source": m_id,
+                    "target": pkg_id,
+                    "relation": "DEPENDS_ON",
+                    "confidence": 1.0,
+                    "metadata": {},
+                })
+
+        # 7. Adjacency, Degrees & Cycle Detection
+        adj: dict[str, list[str]] = {n["id"]: [] for n in nodes_list}
+        rev_adj: dict[str, list[str]] = {n["id"]: [] for n in nodes_list}
+        node_rel_types: dict[str, set[str]] = {n["id"]: set() for n in nodes_list}
+
+        for e in edges_list:
+            s, t, r = e["source"], e["target"], e["relation"]
+            if s in adj and t in adj:
+                adj[s].append(t)
+                rev_adj[t].append(s)
+                node_rel_types[s].add(r)
+                node_rel_types[t].add(r)
+
+        visited: dict[str, int] = {}
+        cycles_detected: list[list[str]] = []
+        path_stack: list[str] = []
+
+        def dfs_cycle(u: str):
+            visited[u] = 1
+            path_stack.append(u)
+            for v in adj.get(u, []):
+                if visited.get(v, 0) == 1:
+                    try:
+                        idx = path_stack.index(v)
+                        cycle_path = path_stack[idx:] + [v]
+                        cycles_detected.append(cycle_path)
+                    except ValueError:
+                        cycles_detected.append([u, v, u])
+                elif visited.get(v, 0) == 0:
+                    dfs_cycle(v)
+            path_stack.pop()
+            visited[u] = 2
+
+        for node in nodes_list:
+            nid = node["id"]
+            if visited.get(nid, 0) == 0:
+                dfs_cycle(nid)
+
+        is_dag = len(cycles_detected) == 0
+
+        # 8. Deterministic Visualization Ranking Algorithm
+        # Target nodes: Rank 0
+        # Direct dependencies/callers (1-hop): Rank 1
+        # Secondary dependencies (2-hop): Rank 2
+        # High-connectivity supporting nodes: Rank 3
+        # Transitive / peripheral nodes: Rank 4
+        target_ids = [n["id"] for n in nodes_list if n["metadata"].get("is_target")]
+        if not target_ids and nodes_list:
+            target_ids = [nodes_list[0]["id"]]
+            nodes_list[0]["metadata"]["is_target"] = True
+
+        # Compute shortest hop distance from target set
+        distance_map: dict[str, int] = {}
+        queue = []
+        for tid in target_ids:
+            distance_map[tid] = 0
+            queue.append(tid)
+
+        head = 0
+        while head < len(queue):
+            curr = queue[head]
+            head += 1
+            curr_dist = distance_map[curr]
+            neighbors = adj.get(curr, []) + rev_adj.get(curr, [])
+            for nxt in neighbors:
+                if nxt not in distance_map:
+                    distance_map[nxt] = curr_dist + 1
+                    queue.append(nxt)
+
+        for node in nodes_list:
+            nid = node["id"]
+            in_deg = len(rev_adj.get(nid, []))
+            out_deg = len(adj.get(nid, []))
+            tot_deg = in_deg + out_deg
+            num_rels = len(node_rel_types.get(nid, set()))
+            dist = distance_map.get(nid, 99)
+
+            if node["metadata"].get("is_target"):
+                v_rank = 0
+                v_label = "TARGET"
+                v_score = 1000 + tot_deg
+            elif dist == 1:
+                v_rank = 1
+                v_label = "DIRECT"
+                v_score = 500 + tot_deg * 5 + num_rels * 10
+            elif dist == 2:
+                v_rank = 2
+                v_label = "SECONDARY"
+                v_score = 250 + tot_deg * 3 + num_rels * 5
+            elif tot_deg >= 4 or in_deg >= 3:
+                v_rank = 3
+                v_label = "CORE SUPPORT"
+                v_score = 150 + tot_deg * 4
+            else:
+                v_rank = 4
+                v_label = "PERIPHERAL"
+                v_score = 50 + tot_deg
+
+            node["vis_rank"] = v_rank
+            node["vis_rank_label"] = v_label
+            node["vis_score"] = v_score
+            node["metadata"]["in_degree"] = in_deg
+            node["metadata"]["out_degree"] = out_deg
+            node["metadata"]["total_degree"] = tot_deg
+
+        # Rank Edges for visual hierarchy
+        node_rank_map = {n["id"]: n["vis_rank"] for n in nodes_list}
+        for edge in edges_list:
+            s_rank = node_rank_map.get(edge["source"], 4)
+            t_rank = node_rank_map.get(edge["target"], 4)
+            min_r = min(s_rank, t_rank)
+            if min_r == 0:
+                edge["edge_priority"] = 1  # Target - Direct
+            elif min_r <= 2:
+                edge["edge_priority"] = 2  # Secondary / Core
+            else:
+                edge["edge_priority"] = 3  # Peripheral
+
+        direct_count = sum(1 for n in nodes_list if n["vis_rank"] == 1)
+        indirect_count = sum(1 for n in nodes_list if n["vis_rank"] >= 2)
+        high_conn_count = sum(1 for n in nodes_list if n["vis_rank"] == 3)
+        peripheral_count = sum(1 for n in nodes_list if n["vis_rank"] >= 4)
+
+        summary_dict = {
+            "total_nodes": len(nodes_list),
+            "total_edges": len(edges_list),
+            "cycle_count": len(cycles_detected),
+            "direct_count": direct_count,
+            "indirect_count": indirect_count,
+            "high_connectivity_count": high_conn_count,
+            "peripheral_count": peripheral_count,
+            "files_count": sum(1 for n in nodes_list if n["type"] == "file"),
+            "symbols_count": sum(1 for n in nodes_list if n["type"] in ("class", "function", "method", "symbol")),
+            "packages_count": sum(1 for n in nodes_list if n["type"] == "package"),
+        }
+
+        return {
+            "is_dag": is_dag,
+            "cycle_count": len(cycles_detected),
+            "cycles": cycles_detected[:12],
+            "nodes": nodes_list,
+            "edges": edges_list,
+            "summary": summary_dict,
+            "metrics": summary_dict,
+        }
+
+    @classmethod
     def generate_html_report(
         cls, index: WorkspaceIndex, output_path: str | Path | None = None
     ) -> Path:
@@ -78,9 +542,6 @@ class ReportGenerator:
         ws_name = html.escape(ws_path.name)
         version = html.escape(index.index_version)
         wia_ver = html.escape(index.wia_version)
-
-        # Export JSON payload sidecar file
-        cls.export_report_json(index, ws_path / ".wia" / "report_data.json")
 
         # Build WorkspaceGraph
         graph = WorkspaceGraph()
@@ -115,6 +576,16 @@ class ReportGenerator:
                 continue
             expl = ExplanationService.explain_file_structured(rel_path, index, graph)
             files_data.append(expl)
+
+        # Export JSON payload sidecar file reusing computed data
+        cls.export_report_json(
+            index,
+            ws_path / ".wia" / "report_data.json",
+            files_data=files_data,
+            deps=deps,
+            git_hotspots=git_hotspots,
+            security_findings=security_findings,
+        )
 
         # High-Level Project Narrative Synthesis
         roles_summary = set(fd["role"].split(" — ")[0] for fd in files_data)
@@ -166,7 +637,14 @@ class ReportGenerator:
             f"Workspace intelligence has been accumulated across <strong>{len(completed_batches)}</strong> completed analysis batches "
             f"out of <strong>{len(batches)}</strong> total batches ({pct}% completed). Each batch inspects source files, parses AST syntax trees, "
             f"extracts code symbols, scans security rules, and computes component change impact risks."
-        )        # Component Architecture Breakdown Cards
+        )
+
+        # Risk Distribution Counts
+        high_risk_count = sum(1 for f in files_data if f.get("impact_risk_level") == "HIGH")
+        medium_risk_count = sum(1 for f in files_data if f.get("impact_risk_level") == "MEDIUM")
+        low_risk_count = sum(1 for f in files_data if f.get("impact_risk_level") == "LOW")
+
+        # Component Architecture Breakdown Cards
         components_map: dict[str, list[dict]] = {}
         for fd in files_data:
             role_category = fd["role"].split(" — ")[0]
@@ -184,19 +662,22 @@ class ReportGenerator:
 
             components_html += f"""
             <div class="card component-card">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 0.5rem;">
-                    <h3 style="margin:0; color:var(--accent-color); font-size:1.1rem;">{comp_name_esc}</h3>
+                <div class="card-header">
+                    <h3 class="card-title">{comp_name_esc}</h3>
                     <span class="badge badge-info">{len(comp_files)} Files</span>
                 </div>
-                <p class="narrative-text" style="font-size:0.9rem;">
+                <p class="narrative-text">
                     Contains {len(comp_files)} workspace component(s) declaring {total_syms} AST code symbol(s).
                     Key modules include {file_names_str}.
                 </p>
-                <div class="header-meta">
+                <div class="card-meta">
                     Discovered Symbols: <strong>{total_syms}</strong> | High Impact Files: <strong>{high_impact_cnt}</strong>
                 </div>
             </div>
             """
+
+        if not components_html:
+            components_html = '<div class="empty-state">No architectural component groupings identified.</div>'
 
         # Accumulated Batch Narratives HTML
         batch_narratives_html = ""
@@ -219,30 +700,31 @@ class ReportGenerator:
                 else '<span class="badge badge-warning">IN PROGRESS</span>'
             )
 
-            err_html = f'<div class="error-msg">{html.escape(b.error_message)}</div>' if b.error_message else ""
+            err_html = f'<div class="error-box">{html.escape(b.error_message)}</div>' if b.error_message else ""
             b_files_str = ", ".join([html.escape(p) for p in b.file_paths])
 
             batch_narratives_html += f"""
             <div class="card batch-card" id="batch-{b_id_esc.lower().replace(' ', '-')}">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 0.5rem;">
-                    <h3 style="margin:0; color:var(--accent-color); font-size: 1.05rem;">
+                <div class="card-header">
+                    <h3 class="card-title">
                         <a href="#batch-{b_id_esc.lower().replace(' ', '-')}" class="anchor-link">#</a> {b_id_esc} — Technical Narrative
                     </h3>
                     {status_badge}
                 </div>
-                <p class="narrative-text" style="font-size:0.9rem; margin-bottom: 0.5rem;">{b_narr}</p>
+                <p class="narrative-text">{b_narr}</p>
                 {err_html}
-                <details style="margin-top: 0.4rem;">
-                    <summary style="font-size:0.8rem; color:var(--muted-color); cursor:pointer;">View Batch File List ({len(b.file_paths)} files)</summary>
-                    <div style="margin-top:0.4rem; font-size:0.8rem; font-family:monospace; background:var(--code-bg); padding:0.5rem; border-radius:0.375rem; color:var(--text-color);">
-                        {b_files_str}
-                    </div>
+                <details class="collapsible-details">
+                    <summary>View Batch File List ({len(b.file_paths)} files)</summary>
+                    <div class="code-block" style="margin-top: 0.5rem;">{b_files_str}</div>
                 </details>
-                <div class="header-meta" style="margin-top:0.4rem;">
+                <div class="card-meta">
                     Processed: <strong>{len(b.file_paths)} files</strong> | Duration: <strong>{b.duration_seconds:.2f}s</strong> | Timestamp: <strong>{html.escape(b.started_at[:19].replace('T', ' '))}</strong>
                 </div>
             </div>
             """
+
+        if not batch_narratives_html:
+            batch_narratives_html = '<div class="empty-state">No batch records logged in workspace index.</div>'
 
         # Group Files by Language
         files_by_language: dict[str, list[dict]] = {}
@@ -267,7 +749,7 @@ class ReportGenerator:
         # Build File Intelligence Cards HTML Grouped by Language with Anchors
         language_nav_items_html = ""
         language_select_options_html = (
-            f'                    <option value="" selected disabled>-- Select a Language to Inspect Files --</option>\n'
+            '                    <option value="" selected disabled>-- Select a Language to Filter Files --</option>\n'
         )
         grouped_files_html = ""
 
@@ -277,14 +759,13 @@ class ReportGenerator:
             lang_name_esc = html.escape(lang_name)
             count = len(lang_files)
 
-            # Language Icon
             icon = "🐍" if lang_name == "Python" else "📘" if lang_name == "TypeScript" else "📜" if lang_name == "JavaScript" else "⚙️" if lang_name in ("TOML", "JSON", "YAML") else "📄"
 
             language_nav_items_html += f"""
             <li class="nav-sub-item">
                 <a href="#{lang_id}" onclick="onLanguageSelect('{lang_slug}')">
                     <span><span class="sub-bullet">•</span> {icon} {lang_name_esc}</span>
-                    <span class="badge badge-outline" style="font-size:0.7rem; padding:0.1rem 0.4rem;">{count}</span>
+                    <span class="badge badge-neutral">{count}</span>
                 </a>
             </li>
             """
@@ -299,8 +780,8 @@ class ReportGenerator:
                 lang = html.escape(fd["language"])
                 role = html.escape(fd["role"])
                 purpose = html.escape(fd["purpose"])
-                impact_level = fd["impact_risk_level"]
-                batch_id = html.escape(fd["batch_id"])
+                impact_level = fd.get("impact_risk_level", "LOW")
+                batch_id = html.escape(fd.get("batch_id", "Batch-1"))
 
                 risk_class = (
                     "badge-danger"
@@ -311,7 +792,7 @@ class ReportGenerator:
                 )
 
                 symbols_html = ""
-                for s in fd["symbols"]:
+                for s in fd.get("symbols", []):
                     stype = s.get("symbol_type")
                     if stype == "import":
                         continue
@@ -319,13 +800,15 @@ class ReportGenerator:
                     doc_raw = s.get("docstring") or ""
                     doc = html.escape(doc_raw.strip())
                     doc_str = f" — <span class='doc-text'>{doc}</span>" if doc else ""
-                    symbols_html += f'<li class="sym-item"><span class="sym-type">{stype}</span> <code>{sname}</code>{doc_str}</li>'
+                    symbols_html += f'<li class="sym-item"><span class="sym-type">{stype}</span> <code class="sym-name">{sname}</code>{doc_str}</li>'
 
                 if not symbols_html:
-                    symbols_html = '<li class="text-muted">No top-level functions or classes declared</li>'
+                    symbols_html = '<li class="text-muted" style="font-size:0.85rem; padding:0.25rem 0;">No top-level functions or classes declared.</li>'
 
-                ws_deps_str = ", ".join([html.escape(d) for d in fd["workspace_dependencies"]]) if fd["workspace_dependencies"] else "None"
-                used_by_str = ", ".join([html.escape(u) for u in fd["used_by"]]) if fd["used_by"] else "None"
+                ws_deps = fd.get("workspace_dependencies", [])
+                used_by = fd.get("used_by", [])
+                ws_deps_str = ", ".join([f"<code>{html.escape(d)}</code>" for d in ws_deps]) if ws_deps else '<span class="text-muted">None</span>'
+                used_by_str = ", ".join([f"<code>{html.escape(u)}</code>" for u in used_by]) if used_by else '<span class="text-muted">None</span>'
                 cls_cnt = len([s for s in fd.get("symbols", []) if s.get("symbol_type") == "class"])
                 func_cnt = len([s for s in fd.get("symbols", []) if s.get("symbol_type") in ("function", "method")])
                 total_sym_cnt = len(fd.get("symbols", []))
@@ -333,35 +816,37 @@ class ReportGenerator:
                 file_narrative_text = (
                     f"The file <code>{rel_p}</code> fulfills the architectural role of <strong>{role}</strong>. "
                     f"{purpose} Declares {cls_cnt} class(es) and {func_cnt} function(s). "
-                    f"Imports <em>{ws_deps_str}</em> and is imported by <em>{used_by_str}</em>. "
+                    f"Imports {ws_deps_str} and is imported by {used_by_str}. "
                     f"Evaluated change impact risk: <strong>{impact_level}</strong>."
                 )
 
                 group_cards_html += f"""
                 <div class="card file-card" id="{file_anchor_id}" data-filepath="{rel_p.lower()}" data-language="{lang_slug}" data-batch="{batch_id}">
                     <div class="file-card-header">
-                        <div>
+                        <div class="file-title-wrap">
                             <a href="#{file_anchor_id}" class="anchor-link" title="Direct link to {rel_p}">#</a>
                             <span class="file-title">{rel_p}</span>
-                            <span class="badge badge-info">{lang}</span>
-                            <span class="badge badge-outline">{batch_id}</span>
+                            <span class="badge badge-neutral">{lang}</span>
+                            <span class="badge badge-neutral">{batch_id}</span>
                         </div>
                         <span class="badge {risk_class}">Impact: {impact_level}</span>
                     </div>
-                    <p class="narrative-text" style="font-size:0.9rem; margin-top: 0.4rem; margin-bottom: 0.5rem;">{file_narrative_text}</p>
+                    <p class="narrative-text" style="margin-top:0.4rem; margin-bottom:0.6rem;">{file_narrative_text}</p>
 
-                    <details class="file-details">
-                        <summary>View Declared Symbols ({total_sym_cnt}) & Dependencies</summary>
+                    <details class="collapsible-details file-details">
+                        <summary>View Declared Symbols ({total_sym_cnt}) & Direct Dependencies</summary>
                         <div class="details-content">
                             <ul class="sym-list">
                                 {symbols_html}
                             </ul>
-                            <div class="grid-2" style="font-size:0.85rem;">
+                            <div class="dep-links-grid">
                                 <div>
-                                    <strong>Depends On:</strong> {ws_deps_str}
+                                    <span class="dep-label">Depends On:</span>
+                                    <div class="dep-values">{ws_deps_str}</div>
                                 </div>
                                 <div>
-                                    <strong>Used By:</strong> {used_by_str}
+                                    <span class="dep-label">Used By:</span>
+                                    <div class="dep-values">{used_by_str}</div>
                                 </div>
                             </div>
                         </div>
@@ -370,23 +855,26 @@ class ReportGenerator:
                 """
 
             grouped_files_html += f"""
-            <details class="language-dropdown-panel card" id="{lang_id}" data-language-group="{lang_slug}" style="display:block; margin-bottom: 1rem;">
-                <summary class="language-dropdown-header">
-                    <div style="display:flex; align-items:center; gap:0.6rem;">
+            <details class="section-panel card" id="{lang_id}" data-language-group="{lang_slug}" open>
+                <summary class="section-panel-header">
+                    <div class="header-left">
                         <span class="dropdown-chevron">▶</span>
-                        <a href="#{lang_id}" class="anchor-link" style="font-size:1.15rem;" title="Direct link to {lang_name_esc} files" onclick="event.stopPropagation()">#</a>
-                        <h3 style="margin:0; font-size:1.1rem; color:var(--text-color); display:inline-block;">{icon} {lang_name_esc} Files</h3>
+                        <a href="#{lang_id}" class="anchor-link" title="Direct link to {lang_name_esc} files" onclick="event.stopPropagation()">#</a>
+                        <h3 class="panel-heading">{icon} {lang_name_esc} Files</h3>
                         <span class="badge badge-info">{count} File{'s' if count != 1 else ''}</span>
                     </div>
-                    <div style="display:flex; align-items:center; gap:0.6rem;">
-                        <button class="toggle-btn" onclick="event.stopPropagation(); toggleLanguageDetails('{lang_id}')">Toggle All Symbols</button>
+                    <div class="header-right">
+                        <button class="btn btn-sm btn-secondary" onclick="event.stopPropagation(); toggleLanguageDetails('{lang_id}')">Toggle Symbols</button>
                     </div>
                 </summary>
-                <div class="language-file-list" style="margin-top: 1rem; padding-top: 0.85rem; border-top: 1px solid var(--border-color);">
+                <div class="panel-body">
                     {group_cards_html}
                 </div>
             </details>
             """
+
+        if not grouped_files_html:
+            grouped_files_html = '<div class="empty-state">No source files indexed in workspace.</div>'
 
         # Frameworks HTML
         framework_items_html = ""
@@ -401,14 +889,14 @@ class ReportGenerator:
         for lang, count in index.languages.items():
             lang_esc = html.escape(lang)
             lang_slug = "".join(c if c.isalnum() or c in "-_" else "_" for c in lang.lower())
-            lang_items_html += f'<a href="#lang-{lang_slug}" class="badge badge-outline" style="text-decoration:none;">{lang_esc}: {count} files</a> '
+            lang_items_html += f'<a href="#lang-{lang_slug}" class="badge badge-neutral" style="text-decoration:none;">{lang_esc}: {count}</a> '
         if not lang_items_html:
             lang_items_html = '<span class="text-muted">No language data</span>'
 
         # Security Findings HTML
         security_html = ""
         for sec in security_findings:
-            sev_class = "badge-danger" if sec.severity.upper() in ("CRITICAL", "HIGH") else "badge-warning"
+            sev_class = "badge-danger" if sec.severity.upper() in ("CRITICAL", "HIGH") else "badge-warning" if sec.severity.upper() == "MEDIUM" else "badge-neutral"
             sec_type = getattr(sec, "finding_type", getattr(sec, "rule_id", "Secret"))
             evid = getattr(sec, "masked_evidence", getattr(sec, "match_snippet", ""))
             security_html += f"""
@@ -423,51 +911,187 @@ class ReportGenerator:
         security_section_html = ""
         if security_findings:
             security_section_html = f"""
-            <section id="security">
-                <h2 class="section-heading"><a href="#security" class="anchor-link">#</a> Security Intelligence ({len(security_findings)} Findings)</h2>
-                <div class="card">
-                    <table>
-                        <thead>
-                            <tr><th>Severity</th><th>Type</th><th>Location</th><th>Evidence</th></tr>
-                        </thead>
-                        <tbody>
-                            {security_html}
-                        </tbody>
-                    </table>
-                </div>
+            <section class="report-section" id="security">
+                <details class="section-panel card" open>
+                    <summary class="section-panel-header">
+                        <div class="header-left">
+                            <span class="dropdown-chevron">▶</span>
+                            <a href="#security" class="anchor-link" title="Direct link to Security Intelligence" onclick="event.stopPropagation()">#</a>
+                            <h2 class="section-title">Security Intelligence Findings</h2>
+                            <span class="badge badge-danger">{len(security_findings)} Findings</span>
+                        </div>
+                    </summary>
+                    <div class="panel-body">
+                        <div class="table-container">
+                            <table class="data-table">
+                                <thead>
+                                    <tr><th>Severity</th><th>Type</th><th>Location</th><th>Evidence</th></tr>
+                                </thead>
+                                <tbody>
+                                    {security_html}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </details>
             </section>
             """
 
-        # Dependencies Section HTML (only if dependencies present)
+        # Dependency Conflicts and Graph Payload
+        conflicts = ConflictDetector.detect_conflicts(deps)
+        conflict_pkg_map = {c.package_name.lower(): c for c in conflicts}
+
+        eco_counts: dict[str, int] = {}
+        for d in deps:
+            eco = d.ecosystem.lower() if d.ecosystem else "other"
+            eco_counts[eco] = eco_counts.get(eco, 0) + 1
+
+        manifest_files = sorted(list(set(d.manifest_path for d in deps)))
+
+        deps_data_for_table = []
+        for d in deps:
+            pkg_name = getattr(d, "name", getattr(d, "package_name", ""))
+            ver_spec = getattr(d, "version_spec", getattr(d, "specifier", "*"))
+            m_path = getattr(d, "manifest_path", "manifest")
+            eco = getattr(d, "ecosystem", "generic")
+            dtype = getattr(d, "dependency_type", "runtime")
+
+            referencing_files = []
+            for rel_p, frec in index.files.items():
+                if frec.indexing_status != "INDEXED":
+                    continue
+                imports = frec.extra_metadata.get("imports", [])
+                if any(
+                    pkg_name.lower() == imp.lower().split(".")[0]
+                    or (f" {pkg_name.lower()} " in f" {imp.lower()} ")
+                    or pkg_name.lower() in imp.lower()
+                    for imp in imports
+                ):
+                    referencing_files.append(rel_p)
+
+            has_conflict = pkg_name.lower() in conflict_pkg_map
+            conflict_obj = conflict_pkg_map.get(pkg_name.lower())
+            conflict_reason = conflict_obj.reason if conflict_obj else ""
+
+            deps_data_for_table.append({
+                "name": pkg_name,
+                "version": ver_spec or "*",
+                "manifest": m_path,
+                "ecosystem": eco,
+                "type": dtype,
+                "has_conflict": has_conflict,
+                "conflict_reason": conflict_reason,
+                "used_in": referencing_files[:6],
+                "used_count": len(referencing_files),
+            })
+
+        conflicts_banner_html = ""
+        if conflicts:
+            conflict_items_html = ""
+            for c in conflicts:
+                affected_str = ", ".join(f"<code>{html.escape(m)}</code>" for m in c.affected_manifests)
+                conflict_items_html += f"""
+                <div class="conflict-item">
+                    <div class="conflict-item-header">
+                        <strong class="conflict-pkg-name">{html.escape(c.package_name)}</strong>
+                        <span class="badge badge-danger">{html.escape(c.conflict_type)}</span>
+                    </div>
+                    <div class="conflict-desc">{html.escape(c.reason)}</div>
+                    <div class="conflict-meta">Affected Manifests: {affected_str}</div>
+                </div>
+                """
+            conflicts_banner_html = f"""
+            <div class="card conflict-card">
+                <div class="conflict-header">
+                    <span class="conflict-icon">⚠️</span>
+                    <h3 class="conflict-title">Detected Dependency Conflicts ({len(conflicts)})</h3>
+                </div>
+                {conflict_items_html}
+            </div>
+            """
+
+        eco_filter_pills_html = f'<button class="btn btn-sm btn-secondary dep-filter-btn active" data-eco="all" onclick="filterDepEcosystem(\'all\', this)">All ({len(deps)})</button>'
+        for eco_name, eco_cnt in sorted(eco_counts.items()):
+            eco_filter_pills_html += f'<button class="btn btn-sm btn-secondary dep-filter-btn" data-eco="{html.escape(eco_name)}" onclick="filterDepEcosystem(\'{html.escape(eco_name)}\', this)">{html.escape(eco_name.capitalize())} ({eco_cnt})</button>'
+
+        manifest_badges_html = " ".join(f'<span class="badge badge-neutral">📄 {html.escape(m)}</span>' for m in manifest_files)
+
+        deps_rows_html = ""
+        for d in deps_data_for_table:
+            conf_badge = '<span class="badge badge-danger" style="margin-left:0.4rem;">Conflict</span>' if d["has_conflict"] else ""
+            used_str = f'{d["used_count"]} file(s)' if d["used_count"] > 0 else '<span class="text-muted">Direct</span>'
+            deps_rows_html += f"""
+            <tr>
+                <td><strong>{html.escape(d["name"])}</strong>{conf_badge}</td>
+                <td><code>{html.escape(d["version"])}</code></td>
+                <td><code>{html.escape(d["manifest"])}</code></td>
+                <td><span class="badge badge-info">{html.escape(d["ecosystem"])}</span></td>
+                <td><span class="badge badge-neutral">{html.escape(d["type"])}</span></td>
+                <td>{used_str}</td>
+            </tr>
+            """
+
         deps_section_html = ""
         if deps:
-            deps_rows_html = ""
-            for d in deps:
-                pkg_name = getattr(d, "name", getattr(d, "package_name", ""))
-                ver_spec = getattr(d, "version_spec", getattr(d, "specifier", "Any"))
-                deps_rows_html += f"""
-                <tr>
-                    <td><strong>{html.escape(pkg_name)}</strong></td>
-                    <td>{html.escape(ver_spec or 'Any')}</td>
-                    <td><code>{html.escape(d.manifest_path)}</code></td>
-                    <td>{html.escape(d.ecosystem)}</td>
-                </tr>
-                """
             deps_section_html = f"""
-            <section id="dependencies">
-                <h2 class="section-heading"><a href="#dependencies" class="anchor-link">#</a> Manifest Dependencies ({len(deps)})</h2>
-                <div class="card">
-                    <table>
-                        <thead>
-                            <tr><th>Package Name</th><th>Version</th><th>Manifest</th><th>Ecosystem</th></tr>
-                        </thead>
-                        <tbody>
-                            {deps_rows_html}
-                        </tbody>
-                    </table>
-                </div>
+            <section class="report-section" id="dependencies">
+                <details class="section-panel card" open>
+                    <summary class="section-panel-header">
+                        <div class="header-left">
+                            <span class="dropdown-chevron">▶</span>
+                            <a href="#dependencies" class="anchor-link" title="Direct link to Manifest Dependencies" onclick="event.stopPropagation()">#</a>
+                            <h2 class="section-title">Manifest Dependencies & Ecosystem Packages</h2>
+                            <span class="badge badge-info">{len(deps)} Packages</span>
+                            <span class="badge badge-neutral">{len(manifest_files)} Manifest{'s' if len(manifest_files) != 1 else ''}</span>
+                            {f'<span class="badge badge-danger">{len(conflicts)} Conflicts</span>' if conflicts else ''}
+                        </div>
+                    </summary>
+
+                    <div class="panel-body">
+                        {conflicts_banner_html}
+
+                        <div class="filter-toolbar">
+                            <div class="filter-group">
+                                <span class="filter-label">Ecosystems:</span>
+                                {eco_filter_pills_html}
+                            </div>
+                            <div class="filter-group">
+                                <span class="filter-label">Manifests:</span>
+                                {manifest_badges_html}
+                            </div>
+                        </div>
+
+                        <div class="table-container" style="margin-top: 1rem;">
+                            <table class="data-table">
+                                <thead>
+                                    <tr><th>Package Name</th><th>Version Spec</th><th>Manifest</th><th>Ecosystem</th><th>Type</th><th>Workspace Usage</th></tr>
+                                </thead>
+                                <tbody>
+                                    {deps_rows_html}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </details>
             </section>
             """
+
+        # Graph Payload Construction
+        graph_payload = cls._build_graph_payload(index, graph, files_data, deps, conflicts)
+        is_dag = graph_payload["is_dag"]
+        cycle_count = graph_payload["cycle_count"]
+
+        graph_type_title = (
+            "Dependency DAG (Acyclic Graph)"
+            if is_dag
+            else f"Dependency Graph (Directional Graph with {cycle_count} Cycle{'s' if cycle_count != 1 else ''})"
+        )
+        graph_type_badge = (
+            '<span class="badge badge-success">Acyclic (DAG)</span>'
+            if is_dag
+            else f'<span class="badge badge-warning">{cycle_count} Cyclic Loops</span>'
+        )
+
         # Dynamically determine sample impact analysis file from actual project
         sample_impact_file = ""
         for fd in files_data:
@@ -479,65 +1103,28 @@ class ReportGenerator:
         if not sample_impact_file:
             sample_impact_file = "src/main.py"
 
-        # Dynamically determine project ecosystem & install command
-        if (ws_path / "pyproject.toml").exists() or (ws_path / "setup.py").exists():
-            cmd_install_desc = "Install workspace package (Editable Mode with Python pip):"
-            cmd_install = "pip install -e ."
-        elif (ws_path / "requirements.txt").exists():
-            cmd_install_desc = "Install workspace dependencies via pip requirements:"
-            cmd_install = "pip install -r requirements.txt"
-        elif (ws_path / "package.json").exists():
-            cmd_install_desc = "Install workspace Node/TypeScript dependencies:"
-            cmd_install = "npm install"
-        elif (ws_path / "Cargo.toml").exists():
-            cmd_install_desc = "Build workspace Rust crates via Cargo:"
-            cmd_install = "cargo build"
-        elif (ws_path / "go.mod").exists():
-            cmd_install_desc = "Download workspace Go modules:"
-            cmd_install = "go mod download"
-        else:
-            cmd_install_desc = "Install WIA CLI toolchain (Editable Mode or Pip):"
-            cmd_install = "pip install -e ."
+        # Dynamically detect all project-specific developer execution commands
+        project_cmds = cls._detect_project_commands(ws_path, index, files_data)
+        project_commands_html = ""
+        for i, pcmd in enumerate(project_cmds, start=1):
+            cat_badge = f'<span class="badge badge-info" style="margin-left:0.5rem;">{html.escape(pcmd["category"])}</span>'
+            source_badge = f'<span class="badge badge-neutral" style="margin-left:0.4rem;">{html.escape(pcmd["source"])}</span>' if pcmd.get("source") else ""
+            project_commands_html += f"""
+                <div class="cmd-item">
+                    <div class="cmd-desc">
+                        <strong>{i}. {html.escape(pcmd["desc"])}</strong>
+                        {cat_badge}
+                        {source_badge}
+                    </div>
+                    <div class="cmd-box">
+                        <span class="cmd-text">{html.escape(pcmd["command"])}</span>
+                        <button class="btn btn-sm btn-secondary copy-btn" onclick="copyFromBox(this)">Copy</button>
+                    </div>
+                </div>
+            """
 
-        # Dynamically determine project-specific runtime / test execution command
-        fastapi_file = next(
-            (
-                f["file_path"]
-                for f in files_data
-                if (
-                    "fastapi" in f["file_name"].lower()
-                    or "main.py" in f["file_path"].lower()
-                    or "app.py" in f["file_path"].lower()
-                )
-                and f["file_path"].endswith(".py")
-            ),
-            None,
-        )
-        if "FastAPI" in index.frameworks or (fastapi_file and "app" in fastapi_file):
-            entry_mod = (
-                fastapi_file.replace("/", ".").replace("\\", ".").removesuffix(".py")
-                if fastapi_file
-                else "app.main"
-            )
-            cmd_runtime_desc = "Launch FastAPI application server / REST intelligence API:"
-            cmd_runtime = f"uvicorn {entry_mod}:app --reload --port 8000"
-        elif "Django" in index.frameworks or (ws_path / "manage.py").exists():
-            cmd_runtime_desc = "Launch Django development server:"
-            cmd_runtime = "python manage.py runserver"
-        elif "Flask" in index.frameworks:
-            cmd_runtime_desc = "Launch Flask application server:"
-            cmd_runtime = "flask run"
-        elif (ws_path / "package.json").exists():
-            cmd_runtime_desc = "Launch development server / frontend bundle:"
-            cmd_runtime = "npm run dev"
-        elif (ws_path / "tests").exists() or (ws_path / "pytest.ini").exists():
-            cmd_runtime_desc = "Execute automated test verification suite:"
-            cmd_runtime = "pytest -v"
-        else:
-            cmd_runtime_desc = "Query architectural intelligence and component workflows:"
-            cmd_runtime = f'wia ask "What are the primary execution workflows in {ws_name}?"'
-
-        report_json_data = json.dumps({
+        report_json_data = _safe_json_embed({
+            "workspace_name": ws_name,
             "indexed_at": index.indexed_at,
             "index_version": index.index_version,
             "wia_version": index.wia_version,
@@ -548,380 +1135,1083 @@ class ReportGenerator:
             "total_batches": len(batches),
         })
 
+        graph_json_data = _safe_json_embed(graph_payload)
+
         html_content = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>WIA Workspace Intelligence Report — {ws_name}</title>
+    <!-- Apache ECharts for High-Performance Interactive Graph Visualization -->
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
     <style>
         :root {{
-            --bg-color: #0b0f19;
-            --sidebar-bg: #111827;
-            --card-bg: #1f2937;
-            --card-hover: #374151;
-            --text-color: #f9fafb;
-            --muted-color: #9ca3af;
-            --accent-color: #38bdf8;
-            --accent-glow: rgba(56, 189, 248, 0.25);
-            --border-color: #374151;
-            --danger-color: #f43f5e;
-            --warning-color: #fbbf24;
-            --success-color: #34d399;
-            --code-bg: #111827;
+            --bg: #f6f8fb;
+            --surface: #ffffff;
+            --surface-alt: #f1f5f9;
+            --surface-subtle: #f8fafc;
+            --border: #dbe2ea;
+            --border-strong: #cbd5e1;
+            --border-subtle: #edf2f7;
+
+            --text: #172033;
+            --text-secondary: #526071;
+            --text-muted: #718096;
+
+            --primary: #2563eb;
+            --primary-dark: #1d4ed8;
+            --primary-light: #eff6ff;
+            --primary-border: #bfdbfe;
+            --accent: #2563eb;
+            --accent-hover: #1d4ed8;
+
+            --info: #0284c7;
+            --info-bg: #f0f9ff;
+            --info-text: #0369a1;
+            --info-border: #bae6fd;
+
+            --success: #15803d;
+            --success-bg: #f0fdf4;
+            --success-text: #166534;
+            --success-border: #bbf7d0;
+
+            --warning: #b45309;
+            --warning-bg: #fffbeb;
+            --warning-text: #92400e;
+            --warning-border: #fde68a;
+
+            --danger: #b91c1c;
+            --danger-bg: #fef2f2;
+            --danger-text: #991b1b;
+            --danger-border: #fecaca;
+
+            --code-bg: #0f172a;
+            --code-text: #f8fafc;
         }}
-        * {{ box-sizing: border-box; }}
-        html {{ scroll-behavior: smooth; }}
+
+        *, *::before, *::after {{
+            box-sizing: border-box;
+        }}
+
+        html {{
+            scroll-behavior: smooth;
+        }}
+
         body {{
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background-color: var(--bg-color);
-            color: var(--text-color);
+            font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
             margin: 0;
             padding: 0;
+            line-height: 1.5;
+            font-size: 0.9375rem;
+            overflow-x: hidden;
             display: flex;
-            height: 100vh;
-            overflow: hidden;
+            min-height: 100vh;
         }}
-        /* Sidebar */
-        aside {{
+
+        /* Sidebar Navigation */
+        aside.report-sidebar {{
             width: 270px;
-            background-color: var(--sidebar-bg);
-            border-right: 1px solid var(--border-color);
+            background-color: var(--surface);
+            border-right: 1px solid var(--border);
             display: flex;
             flex-direction: column;
-            padding: 1.25rem 1rem;
+            padding: 1.25rem 0.85rem;
             flex-shrink: 0;
+            position: sticky;
+            top: 0;
+            height: 100vh;
+            overflow-y: auto;
+            z-index: 100;
         }}
+
         .brand {{
-            font-size: 1.2rem;
-            font-weight: bold;
-            color: var(--accent-color);
-            margin-bottom: 1.5rem;
+            font-size: 1.15rem;
+            font-weight: 700;
+            color: var(--primary);
+            margin-bottom: 1.25rem;
             display: flex;
             align-items: center;
             gap: 0.5rem;
+            letter-spacing: -0.02em;
+            padding: 0 0.5rem;
         }}
+
         .nav-menu {{
             list-style: none;
             padding: 0;
             margin: 0;
             display: flex;
             flex-direction: column;
-            gap: 0.35rem;
-            overflow-y: auto;
+            gap: 0.2rem;
         }}
+
         .nav-item a {{
-            color: var(--muted-color);
+            color: var(--text-secondary);
             text-decoration: none;
-            padding: 0.6rem 0.8rem;
-            border-radius: 0.5rem;
+            padding: 0.5rem 0.75rem;
+            border-radius: 6px;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            font-size: 0.88rem;
+            font-size: 0.875rem;
             font-weight: 500;
-            transition: all 0.15s ease;
+            transition: background-color 0.15s ease, color 0.15s ease;
         }}
+
         .nav-item a:hover, .nav-item a.active {{
-            background-color: rgba(56, 189, 248, 0.12);
-            color: var(--accent-color);
+            background-color: var(--primary-light);
+            color: var(--primary);
+            font-weight: 600;
         }}
+
         .nav-sub-menu {{
             list-style: none;
-            padding: 0.2rem 0 0.4rem 1rem;
+            padding: 0.2rem 0 0.4rem 1.25rem;
             margin: 0;
             display: flex;
             flex-direction: column;
-            gap: 0.2rem;
+            gap: 0.15rem;
         }}
+
         .nav-sub-item a {{
-            color: var(--muted-color);
+            color: var(--text-muted);
             text-decoration: none;
-            padding: 0.35rem 0.6rem;
-            border-radius: 0.375rem;
+            padding: 0.3rem 0.5rem;
+            border-radius: 4px;
             display: flex;
             align-items: center;
             justify-content: space-between;
-            font-size: 0.8rem;
-            transition: all 0.15s ease;
+            font-size: 0.8125rem;
+            transition: background-color 0.15s ease, color 0.15s ease;
         }}
+
         .nav-sub-item a:hover {{
-            background-color: rgba(56, 189, 248, 0.08);
-            color: var(--accent-color);
+            background-color: var(--surface-alt);
+            color: var(--text);
         }}
-        .sub-bullet {{ margin-right: 0.35rem; color: var(--accent-color); font-size: 0.9rem; }}
 
-        /* Main Content */
-        main {{
+        .sub-bullet {{
+            margin-right: 0.4rem;
+            color: var(--accent);
+        }}
+
+        /* Main Workspace Container */
+        main.report-main {{
             flex: 1;
+            min-width: 0;
+            padding: 1.75rem 2.5rem;
+            max-width: 1440px;
+            margin: 0 auto;
             overflow-y: auto;
-            padding: 2rem 2.5rem;
         }}
-        header {{
-            border-bottom: 1px solid var(--border-color);
-            padding-bottom: 1rem;
-            margin-bottom: 1.5rem;
+
+        header.report-header {{
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 1.15rem;
+            margin-bottom: 1.75rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            flex-wrap: wrap;
+            gap: 1rem;
+        }}
+
+        h1.report-heading {{
+            margin: 0;
+            color: var(--text);
+            font-size: 1.55rem;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+        }}
+
+        .header-meta {{
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            margin-top: 0.3rem;
+            word-break: break-all;
+        }}
+
+        .header-meta code {{
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+            font-size: 0.825rem;
+            background: var(--surface);
+            padding: 0.15rem 0.35rem;
+            border-radius: 4px;
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+        }}
+
+        /* Section Layouts */
+        .report-section {{
+            margin-bottom: 2rem;
+        }}
+
+        .section-title {{
+            font-size: 1.15rem;
+            font-weight: 600;
+            color: var(--text);
+            margin: 0;
+            letter-spacing: -0.015em;
+        }}
+
+        /* Cards and Panels */
+        .card {{
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1.25rem;
+            margin-bottom: 1.15rem;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+            min-width: 0;
+        }}
+
+        .card-header {{
             display: flex;
             justify-content: space-between;
             align-items: center;
-        }}
-        h1 {{ margin: 0; color: var(--text-color); font-size: 1.75rem; }}
-        .header-meta {{ color: var(--muted-color); font-size: 0.85rem; margin-top: 0.3rem; }}
-
-        /* Anchor Links */
-        .anchor-link {{
-            color: var(--muted-color);
-            text-decoration: none;
-            font-size: 0.85em;
-            margin-right: 0.35rem;
-            opacity: 0.4;
-            transition: opacity 0.2s ease, color 0.2s ease;
-        }}
-        .anchor-link:hover {{
-            opacity: 1.0;
-            color: var(--accent-color);
-        }}
-        :target {{
-            animation: highlight-pulse 2s ease-out;
-        }}
-        @keyframes highlight-pulse {{
-            0% {{ background-color: rgba(56, 189, 248, 0.2); outline: 2px solid var(--accent-color); }}
-            100% {{ background-color: var(--card-bg); outline: none; }}
+            margin-bottom: 0.5rem;
+            flex-wrap: wrap;
+            gap: 0.5rem;
         }}
 
-        /* Prose & Narratives */
+        .card-title {{
+            margin: 0;
+            font-size: 1rem;
+            font-weight: 600;
+            color: var(--primary);
+        }}
+
+        .card-meta {{
+            font-size: 0.8125rem;
+            color: var(--text-muted);
+            margin-top: 0.5rem;
+            padding-top: 0.5rem;
+            border-top: 1px solid var(--border-subtle);
+        }}
+
         .narrative-card {{
-            background-color: var(--card-bg);
-            border: 1px solid var(--border-color);
-            border-left: 4px solid var(--accent-color);
-            border-radius: 0.75rem;
-            padding: 1.5rem;
-            margin-bottom: 1.5rem;
+            border-left: 4px solid var(--primary);
         }}
-        .narrative-card h2 {{
-            margin-top: 0;
-            margin-bottom: 0.75rem;
-            font-size: 1.3rem;
-            color: var(--accent-color);
-        }}
+
         .narrative-text {{
-            font-size: 0.95rem;
-            line-height: 1.65;
-            color: #e2e8f0;
-            margin-bottom: 0.75rem;
+            font-size: 0.9375rem;
+            line-height: 1.6;
+            color: var(--text-secondary);
+            margin: 0 0 0.75rem 0;
         }}
-        .narrative-text:last-child {{ margin-bottom: 0; }}
 
-        /* Installation Commands Guide */
-        .install-card {{
-            background: linear-gradient(145deg, #162032, #1f2937);
-            border: 1px solid rgba(56, 189, 248, 0.3);
-            border-left: 4px solid var(--accent-color);
-            border-radius: 0.75rem;
-            padding: 1.5rem;
-            margin-bottom: 1.5rem;
+        .narrative-text:last-child {{
+            margin-bottom: 0;
         }}
-        .cmd-box {{
-            background-color: var(--code-bg);
-            border: 1px solid var(--border-color);
-            border-radius: 0.5rem;
-            padding: 0.75rem 1rem;
-            margin-bottom: 0.75rem;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            font-family: "JetBrains Mono", Consolas, "Courier New", monospace;
-            font-size: 0.88rem;
+
+        /* Grid Utilities */
+        .grid-4 {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+            gap: 0.85rem;
+            margin-bottom: 1.25rem;
         }}
-        .cmd-text {{ color: #38bdf8; }}
-        .cmd-desc {{ color: var(--muted-color); font-size: 0.8rem; margin-bottom: 0.3rem; }}
-        .copy-btn {{
-            background: rgba(255, 255, 255, 0.08);
-            border: 1px solid var(--border-color);
-            color: var(--text-color);
-            padding: 0.3rem 0.6rem;
-            border-radius: 0.375rem;
+
+        .grid-2 {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 0.85rem;
+        }}
+
+        .metric-card {{
+            padding: 0.9rem 1.15rem;
+        }}
+
+        .metric-card h3 {{
+            margin: 0 0 0.3rem 0;
             font-size: 0.75rem;
-            cursor: pointer;
-            transition: all 0.2s ease;
-        }}
-        .copy-btn:hover {{
-            background: var(--accent-color);
-            color: #0b0f19;
-            font-weight: bold;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            font-weight: 600;
+            letter-spacing: 0.05em;
         }}
 
-        .batch-card {{
-            border-left: 4px solid var(--success-color);
-            margin-bottom: 0.85rem;
+        .metric-val {{
+            font-size: 1.65rem;
+            font-weight: 700;
+            color: var(--text);
+            line-height: 1.2;
         }}
-
-        /* Grid & Cards */
-        .grid-4 {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }}
-        .grid-2 {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1rem; }}
-        .card {{ background-color: var(--card-bg); border: 1px solid var(--border-color); border-radius: 0.75rem; padding: 1.25rem; margin-bottom: 1.1rem; }}
-        .metric-card h3 {{ margin: 0 0 0.4rem 0; font-size: 0.78rem; text-transform: uppercase; color: var(--muted-color); letter-spacing: 0.05em; }}
-        .metric-val {{ font-size: 1.75rem; font-weight: bold; color: var(--text-color); }}
 
         /* Badges */
-        .badge {{ display: inline-block; padding: 0.2rem 0.55rem; border-radius: 0.375rem; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; }}
-        .badge-success {{ background-color: rgba(52, 211, 153, 0.15); color: var(--success-color); border: 1px solid rgba(52, 211, 153, 0.3); }}
-        .badge-warning {{ background-color: rgba(251, 191, 36, 0.15); color: var(--warning-color); border: 1px solid rgba(251, 191, 36, 0.3); }}
-        .badge-danger {{ background-color: rgba(244, 63, 94, 0.15); color: var(--danger-color); border: 1px solid rgba(244, 63, 94, 0.3); }}
-        .badge-info {{ background-color: rgba(56, 189, 248, 0.15); color: var(--accent-color); border: 1px solid rgba(56, 189, 248, 0.3); }}
-        .badge-outline {{ border: 1px solid var(--border-color); color: var(--muted-color); }}
-
-        /* Language Sections */
-        .language-section {{
-            margin-bottom: 2rem;
-            padding-top: 0.5rem;
-        }}
-        .language-section-header {{
-            display: flex;
-            justify-content: space-between;
+        .badge {{
+            display: inline-flex;
             align-items: center;
-            border-bottom: 2px solid var(--border-color);
-            padding-bottom: 0.6rem;
-            margin-bottom: 1rem;
-        }}
-        .toggle-btn {{
-            background: rgba(255, 255, 255, 0.06);
-            border: 1px solid var(--border-color);
-            color: var(--muted-color);
-            padding: 0.35rem 0.75rem;
-            border-radius: 0.375rem;
-            font-size: 0.8rem;
-            cursor: pointer;
-            transition: all 0.2s ease;
-        }}
-        .toggle-btn:hover {{
-            background: rgba(56, 189, 248, 0.15);
-            color: var(--accent-color);
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+            line-height: 1;
+            white-space: nowrap;
         }}
 
-        /* Search Box & Language Dropdown */
-        .search-container {{
-            margin-bottom: 0.85rem;
-        }}
-        .search-input {{
-            width: 100%;
-            padding: 0.75rem 1rem;
-            border-radius: 0.5rem;
-            border: 1px solid var(--border-color);
-            background-color: var(--sidebar-bg);
-            color: var(--text-color);
-            font-size: 0.9rem;
-        }}
-        .search-input:focus {{
-            outline: 2px solid var(--accent-color);
-        }}
-        .lang-dropdown-wrapper {{
-            margin-bottom: 1.25rem;
-        }}
-        .dropdown-label {{
-            display: block;
-            font-size: 0.82rem;
-            color: var(--muted-color);
-            margin-bottom: 0.4rem;
-            font-weight: 500;
-        }}
-        .lang-select {{
-            width: 100%;
-            padding: 0.75rem 1rem;
-            border-radius: 0.5rem;
-            border: 1px solid var(--border-color);
-            background-color: var(--sidebar-bg);
-            color: var(--text-color);
-            font-size: 0.92rem;
-            font-weight: 500;
-            cursor: pointer;
-            outline: none;
-            transition: all 0.2s ease;
-        }}
-        .lang-select:focus {{
-            border-color: var(--accent-color);
-            box-shadow: 0 0 0 2px var(--accent-glow);
-        }}
-        .lang-select option {{
-            background-color: var(--sidebar-bg);
-            color: var(--text-color);
-            padding: 0.5rem;
+        .badge-success {{
+            background-color: var(--success-bg);
+            color: var(--success-text);
+            border: 1px solid var(--success-border);
         }}
 
-        /* Language Dropdown Panels */
-        .language-dropdown-panel {{
-            background-color: var(--card-bg);
-            border: 1px solid var(--border-color);
-            border-radius: 0.75rem;
-            padding: 1.1rem 1.25rem;
-            margin-bottom: 1.25rem;
-            transition: all 0.2s ease;
+        .badge-warning {{
+            background-color: var(--warning-bg);
+            color: var(--warning-text);
+            border: 1px solid var(--warning-border);
         }}
-        .language-dropdown-panel[open] {{
-            border-color: rgba(56, 189, 248, 0.4);
+
+        .badge-danger {{
+            background-color: var(--danger-bg);
+            color: var(--danger-text);
+            border: 1px solid var(--danger-border);
         }}
-        .language-dropdown-header {{
+
+        .badge-info {{
+            background-color: var(--info-bg);
+            color: var(--info-text);
+            border: 1px solid var(--info-border);
+        }}
+
+        .badge-neutral {{
+            background-color: var(--surface-alt);
+            color: var(--text-secondary);
+            border: 1px solid var(--border);
+        }}
+
+        /* Buttons */
+        .btn {{
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-family: inherit;
+            font-size: 0.8125rem;
+            font-weight: 500;
+            padding: 0.35rem 0.7rem;
+            border-radius: 5px;
+            border: 1px solid var(--border);
+            background-color: var(--surface);
+            color: var(--text-secondary);
             cursor: pointer;
-            list-style: none;
+            transition: all 0.15s ease;
+            white-space: nowrap;
+        }}
+
+        .btn:hover {{
+            background-color: var(--surface-alt);
+            color: var(--text);
+            border-color: var(--border-strong);
+        }}
+
+        .btn-primary {{
+            background-color: var(--primary);
+            color: #ffffff;
+            border-color: var(--primary);
+        }}
+
+        .btn-primary:hover {{
+            background-color: var(--primary-dark);
+            border-color: var(--primary-dark);
+            color: #ffffff;
+        }}
+
+        .btn-sm {{
+            padding: 0.25rem 0.5rem;
+            font-size: 0.75rem;
+        }}
+
+        .btn.active {{
+            background-color: var(--primary-light);
+            color: var(--primary);
+            border-color: var(--primary-border);
+            font-weight: 600;
+        }}
+
+        /* Section Panels */
+        .section-panel {{
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 0;
+            margin-bottom: 1.25rem;
+            overflow: hidden;
+        }}
+
+        .section-panel-header {{
+            padding: 0.9rem 1.15rem;
+            background: var(--surface);
+            cursor: pointer;
             display: flex;
             justify-content: space-between;
             align-items: center;
             user-select: none;
+            border-bottom: 1px solid transparent;
+            transition: background-color 0.15s ease;
         }}
-        .language-dropdown-header::-webkit-details-marker {{
+
+        .section-panel[open] > .section-panel-header {{
+            border-bottom-color: var(--border);
+            background-color: #fafbfc;
+        }}
+
+        .section-panel-header::-webkit-details-marker {{
             display: none;
         }}
-        .dropdown-chevron {{
-            color: var(--accent-color);
-            font-size: 0.85rem;
-            margin-right: 0.35rem;
-            display: inline-block;
-            transition: transform 0.2s ease;
+
+        .header-left {{
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            flex-wrap: wrap;
         }}
+
+        .header-right {{
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }}
+
+        .panel-heading {{
+            margin: 0;
+            font-size: 1.05rem;
+            font-weight: 600;
+            color: var(--text);
+        }}
+
+        .panel-body {{
+            padding: 1.15rem;
+        }}
+
+        .dropdown-chevron {{
+            color: var(--text-muted);
+            font-size: 0.75rem;
+            transition: transform 0.2s ease;
+            display: inline-block;
+        }}
+
         details[open] > summary .dropdown-chevron {{
             transform: rotate(90deg);
         }}
 
+        /* ================================================= */
+        /* DEPENDENCY GRAPH PANEL & CONTROLS                 */
+        /* ================================================= */
+        .graph-panel {{
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--surface);
+            overflow: hidden;
+            margin-bottom: 1.75rem;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+        }}
+
+        /* Graph Statistics Bar */
+        .graph-stats-bar {{
+            padding: 0.5rem 1rem;
+            background: #f8fafc;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            flex-wrap: wrap;
+            font-size: 0.8125rem;
+        }}
+
+        .stat-pill {{
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            color: var(--text-secondary);
+        }}
+
+        .stat-pill strong {{
+            color: var(--text);
+        }}
+
+        .stat-pill.clickable {{
+            cursor: pointer;
+            padding: 0.15rem 0.4rem;
+            border-radius: 4px;
+            transition: background 0.15s ease;
+        }}
+
+        .stat-pill.clickable:hover {{
+            background: var(--surface-alt);
+        }}
+
+        .graph-toolbar {{
+            padding: 0.65rem 1rem;
+            background: #ffffff;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 0.6rem;
+        }}
+
+        .graph-toolbar-left {{
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+            flex: 1;
+            min-width: 260px;
+        }}
+
+        .graph-toolbar-right {{
+            display: flex;
+            align-items: center;
+            gap: 0.35rem;
+            flex-wrap: wrap;
+        }}
+
+        .search-input {{
+            padding: 0.35rem 0.65rem;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+            background: var(--surface);
+            color: var(--text);
+            font-size: 0.8125rem;
+            min-width: 200px;
+            outline: none;
+            transition: border-color 0.15s ease, box-shadow 0.15s ease;
+        }}
+
+        .search-input:focus {{
+            border-color: var(--accent);
+            box-shadow: 0 0 0 2px var(--primary-light);
+        }}
+
+        .graph-view-wrapper {{
+            display: flex;
+            width: 100%;
+            height: 65vh;
+            min-height: 520px;
+            max-height: 800px;
+            position: relative;
+            background: #fbfcfe;
+        }}
+
+        .graph-viewport {{
+            flex: 1;
+            height: 100%;
+            min-width: 0;
+            position: relative;
+        }}
+
+        #depEchartsChart {{
+            width: 100%;
+            height: 100%;
+        }}
+
+        /* Graph Node Details Sidebar Panel */
+        .graph-details-sidebar {{
+            width: 320px;
+            border-left: 1px solid var(--border);
+            background: var(--surface);
+            height: 100%;
+            overflow-y: auto;
+            padding: 1.15rem;
+            display: flex;
+            flex-direction: column;
+            flex-shrink: 0;
+            font-size: 0.875rem;
+        }}
+
+        .details-panel-title {{
+            font-size: 0.925rem;
+            font-weight: 700;
+            color: var(--text);
+            margin: 0 0 0.75rem 0;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }}
+
+        .node-detail-field {{
+            margin-bottom: 0.65rem;
+        }}
+
+        .node-detail-label {{
+            font-size: 0.72rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            margin-bottom: 0.15rem;
+        }}
+
+        .node-detail-value {{
+            color: var(--text);
+            font-size: 0.85rem;
+            word-break: break-all;
+        }}
+
+        .node-detail-value code {{
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+            background: var(--surface-alt);
+            padding: 0.15rem 0.35rem;
+            border-radius: 4px;
+            font-size: 0.8125rem;
+            border: 1px solid var(--border);
+        }}
+
+        .clickable-node-link {{
+            color: var(--primary);
+            cursor: pointer;
+            text-decoration: underline;
+            padding: 0.1rem 0;
+            display: block;
+        }}
+
+        .clickable-node-link:hover {{
+            color: var(--primary-dark);
+        }}
+
+        .graph-legend-bar {{
+            padding: 0.55rem 1rem;
+            background: #f8fafc;
+            border-top: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            flex-wrap: wrap;
+            gap: 0.65rem;
+        }}
+
+        .legend-items {{
+            display: flex;
+            align-items: center;
+            gap: 0.85rem;
+            flex-wrap: wrap;
+        }}
+
+        .legend-item {{
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+        }}
+
+        .legend-dot {{
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+        }}
+
+        .legend-line {{
+            width: 12px;
+            height: 2px;
+            display: inline-block;
+        }}
+
         /* Tables */
-        table {{ width: 100%; border-collapse: collapse; margin-top: 0.5rem; text-align: left; font-size: 0.88rem; }}
-        th {{ background-color: rgba(0, 0, 0, 0.2); padding: 0.65rem; border-bottom: 1px solid var(--border-color); color: var(--muted-color); font-weight: 600; }}
-        td {{ padding: 0.65rem; border-bottom: 1px solid var(--border-color); }}
+        .table-container {{
+            width: 100%;
+            overflow-x: auto;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+        }}
 
-        /* File Card Details */
-        .file-card {{ border-left: 3px solid var(--border-color); margin-bottom: 0.85rem; transition: border-color 0.2s ease; }}
-        .file-card:hover {{ border-left-color: var(--accent-color); }}
-        .file-card-header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem; }}
-        .file-title {{ font-weight: 600; font-family: monospace; font-size: 0.92rem; color: var(--accent-color); margin-right: 0.5rem; }}
-        .file-details summary {{ cursor: pointer; font-size: 0.8rem; color: var(--accent-color); font-weight: 500; }}
-        .details-content {{ margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px solid var(--border-color); }}
-        .sym-list {{ list-style: none; padding: 0; margin: 0.4rem 0 0.6rem 0; font-size: 0.83rem; }}
-        .sym-item {{ padding: 0.2rem 0; border-bottom: 1px dashed rgba(255,255,255,0.05); }}
-        .sym-type {{ font-size: 0.7rem; text-transform: uppercase; font-weight: bold; color: var(--muted-color); display: inline-block; width: 60px; }}
-        .doc-text {{ color: var(--muted-color); font-style: italic; }}
+        table.data-table {{
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+            font-size: 0.875rem;
+            white-space: nowrap;
+        }}
 
-        /* Progress Bar */
-        .progress-bar-bg {{ height: 8px; background-color: var(--border-color); border-radius: 4px; overflow: hidden; margin: 0.5rem 0; }}
-        .progress-bar-fill {{ height: 100%; background-color: var(--accent-color); transition: width 0.3s ease; }}
+        table.data-table th {{
+            background-color: var(--surface-alt);
+            padding: 0.6rem 0.8rem;
+            border-bottom: 1px solid var(--border);
+            color: var(--text-secondary);
+            font-weight: 600;
+            font-size: 0.8125rem;
+        }}
 
-        /* Search Box */
-        .search-input {{ width: 100%; padding: 0.7rem 1rem; border-radius: 0.5rem; border: 1px solid var(--border-color); background-color: var(--sidebar-bg); color: var(--text-color); font-size: 0.9rem; }}
-        .search-input:focus {{ outline: 2px solid var(--accent-color); }}
+        table.data-table td {{
+            padding: 0.6rem 0.8rem;
+            border-bottom: 1px solid var(--border-subtle);
+            color: var(--text);
+        }}
 
-        .section-heading {{ font-size: 1.25rem; font-weight: bold; margin: 1.75rem 0 1rem 0; color: var(--text-color); border-left: 4px solid var(--accent-color); padding-left: 0.6rem; display: flex; align-items: center; }}
-        code {{ background-color: var(--code-bg); padding: 0.15rem 0.35rem; border-radius: 0.25rem; font-family: monospace; font-size: 0.85em; }}
-        .text-muted {{ color: var(--muted-color); }}
+        table.data-table tr:last-child td {{
+            border-bottom: none;
+        }}
+
+        table.data-table tr:hover td {{
+            background-color: var(--surface-subtle);
+        }}
+
+        /* Code & Paths */
+        code {{
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+            background-color: var(--surface-alt);
+            padding: 0.15rem 0.35rem;
+            border-radius: 4px;
+            font-size: 0.85em;
+            color: var(--text-secondary);
+            border: 1px solid var(--border);
+        }}
+
+        .code-block {{
+            background: var(--code-bg);
+            color: var(--code-text);
+            padding: 0.75rem 1rem;
+            border-radius: 6px;
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+            font-size: 0.8125rem;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }}
+
+        /* Commands Section */
+        .cmd-item {{
+            margin-bottom: 0.75rem;
+        }}
+
+        .cmd-desc {{
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+            margin-bottom: 0.3rem;
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+        }}
+
+        .cmd-box {{
+            background-color: #fafbfc;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 0.45rem 0.75rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+            font-size: 0.85rem;
+            gap: 0.75rem;
+        }}
+
+        .cmd-text {{
+            color: var(--primary);
+            overflow-x: auto;
+            white-space: nowrap;
+            flex: 1;
+        }}
+
+        /* File Cards */
+        .file-card {{
+            border-left: 3px solid var(--border);
+            margin-bottom: 0.75rem;
+            padding: 0.9rem 1.1rem;
+            transition: border-color 0.15s ease;
+        }}
+
+        .file-card:hover {{
+            border-left-color: var(--primary);
+        }}
+
+        .file-card-header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.35rem;
+            flex-wrap: wrap;
+            gap: 0.4rem;
+        }}
+
+        .file-title-wrap {{
+            display: flex;
+            align-items: center;
+            gap: 0.35rem;
+            flex-wrap: wrap;
+        }}
+
+        .file-title {{
+            font-weight: 600;
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+            font-size: 0.875rem;
+            color: var(--primary);
+        }}
+
+        .collapsible-details summary {{
+            cursor: pointer;
+            font-size: 0.8125rem;
+            color: var(--primary);
+            font-weight: 500;
+            user-select: none;
+        }}
+
+        .collapsible-details summary:hover {{
+            text-decoration: underline;
+        }}
+
+        .details-content {{
+            margin-top: 0.5rem;
+            padding-top: 0.5rem;
+            border-top: 1px solid var(--border-subtle);
+        }}
+
+        .sym-list {{
+            list-style: none;
+            padding: 0;
+            margin: 0.35rem 0 0.5rem 0;
+            font-size: 0.8125rem;
+        }}
+
+        .sym-item {{
+            padding: 0.2rem 0;
+            border-bottom: 1px dashed var(--border-subtle);
+        }}
+
+        .sym-type {{
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            font-weight: 700;
+            color: var(--text-muted);
+            display: inline-block;
+            width: 65px;
+        }}
+
+        .sym-name {{
+            color: var(--text);
+            font-weight: 600;
+        }}
+
+        .doc-text {{
+            color: var(--text-muted);
+            font-style: italic;
+        }}
+
+        .dep-links-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+            gap: 0.65rem;
+            font-size: 0.8125rem;
+            margin-top: 0.5rem;
+            background: var(--surface-alt);
+            padding: 0.6rem 0.8rem;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+        }}
+
+        .dep-label {{
+            font-weight: 600;
+            color: var(--text-secondary);
+            display: block;
+            margin-bottom: 0.2rem;
+        }}
+
+        .dep-values {{
+            color: var(--text);
+            word-break: break-all;
+        }}
+
+        /* Batch Cards & Progress */
+        .batch-card {{
+            border-left: 3px solid var(--primary);
+        }}
+
+        .progress-bar-bg {{
+            height: 6px;
+            background-color: var(--border);
+            border-radius: 3px;
+            overflow: hidden;
+            margin: 0.5rem 0;
+        }}
+
+        .progress-bar-fill {{
+            height: 100%;
+            background-color: var(--primary);
+            transition: width 0.3s ease;
+        }}
+
+        /* Conflict Banner */
+        .conflict-card {{
+            border: 1px solid var(--danger-border);
+            background: var(--danger-bg);
+            margin-bottom: 1.15rem;
+            padding: 0.9rem 1.15rem;
+        }}
+
+        .conflict-header {{
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 0.65rem;
+        }}
+
+        .conflict-title {{
+            margin: 0;
+            color: var(--danger-text);
+            font-size: 0.95rem;
+            font-weight: 700;
+        }}
+
+        .conflict-item {{
+            margin-bottom: 0.45rem;
+            padding: 0.45rem 0.7rem;
+            background: #ffffff;
+            border: 1px solid var(--danger-border);
+            border-radius: 6px;
+        }}
+
+        .conflict-item:last-child {{
+            margin-bottom: 0;
+        }}
+
+        .conflict-item-header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }}
+
+        .conflict-pkg-name {{
+            color: var(--danger-text);
+        }}
+
+        .conflict-desc {{
+            font-size: 0.825rem;
+            color: var(--text-secondary);
+            margin-top: 0.15rem;
+        }}
+
+        .conflict-meta {{
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-top: 0.15rem;
+        }}
+
+        .filter-toolbar {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 0.65rem;
+            margin-bottom: 0.85rem;
+            padding-bottom: 0.65rem;
+            border-bottom: 1px solid var(--border-subtle);
+        }}
+
+        .filter-group {{
+            display: flex;
+            align-items: center;
+            gap: 0.35rem;
+            flex-wrap: wrap;
+        }}
+
+        .filter-label {{
+            font-size: 0.8125rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            margin-right: 0.2rem;
+        }}
+
+        /* Anchor Links */
+        .anchor-link {{
+            color: var(--text-muted);
+            text-decoration: none;
+            font-size: 0.85em;
+            margin-right: 0.3rem;
+            opacity: 0.4;
+            transition: opacity 0.15s ease, color 0.15s ease;
+        }}
+
+        .anchor-link:hover {{
+            opacity: 1.0;
+            color: var(--accent);
+        }}
+
+        .empty-state {{
+            padding: 1.75rem 1.25rem;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.875rem;
+            background: var(--surface-alt);
+            border: 1px dashed var(--border-strong);
+            border-radius: 6px;
+        }}
+
+        .error-box {{
+            background: var(--danger-bg);
+            color: var(--danger-text);
+            border: 1px solid var(--danger-border);
+            padding: 0.55rem 0.75rem;
+            border-radius: 6px;
+            font-size: 0.825rem;
+            margin-top: 0.45rem;
+        }}
+
+        .offline-notice {{
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.875rem;
+            background: var(--surface);
+            padding: 1.25rem 1.75rem;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+            max-width: 420px;
+        }}
+
+        @media (max-width: 1024px) {{
+            body {{
+                flex-direction: column;
+            }}
+            aside.report-sidebar {{
+                width: 100%;
+                height: auto;
+                position: relative;
+                border-right: none;
+                border-bottom: 1px solid var(--border);
+            }}
+            main.report-main {{
+                padding: 1.25rem 1rem;
+            }}
+            .graph-view-wrapper {{
+                flex-direction: column;
+                height: auto;
+            }}
+            .graph-viewport {{
+                height: 480px;
+            }}
+            .graph-details-sidebar {{
+                width: 100%;
+                height: 280px;
+                border-left: none;
+                border-top: 1px solid var(--border);
+            }}
+        }}
     </style>
 </head>
 <body>
-    <aside>
+    <aside class="report-sidebar">
         <div class="brand">
             ⚡ WIA Intelligence
         </div>
-        <ul class="nav-menu">
+        <ul class="nav-menu" id="sidebarMenu">
             <li class="nav-item"><a href="#executive-overview" class="active">Executive Overview</a></li>
-            <li class="nav-item"><a href="#installation">Installation & Commands</a></li>
+            <li class="nav-item"><a href="#dependency-graph">Dependency Graph</a></li>
+            <li class="nav-item"><a href="#installation">Developer Commands</a></li>
             <li class="nav-item"><a href="#components">System Architecture</a></li>
-            <li class="nav-item"><a href="#batch-narratives">Batch Analysis Log ({len(batches)})</a></li>
+            <li class="nav-item"><a href="#batch-narratives">Batch Log ({len(batches)})</a></li>
             <li class="nav-item">
                 <a href="#file-narratives">File Intelligence ({len(files_data)})</a>
             </li>
@@ -929,27 +2219,30 @@ class ReportGenerator:
                 {language_nav_items_html}
             </ul>
             {f'<li class="nav-item"><a href="#security">Security ({len(security_findings)})</a></li>' if security_findings else ''}
-            {f'<li class="nav-item"><a href="#dependencies">Dependencies ({len(deps)})</a></li>' if deps else ''}
+            {f'<li class="nav-item"><a href="#dependencies">Manifest Dependencies ({len(deps)})</a></li>' if deps else ''}
         </ul>
     </aside>
 
-    <main>
-        <header>
+    <main class="report-main" id="mainContainer">
+        <header class="report-header">
             <div>
-                <h1>WIA Workspace Intelligence Report</h1>
+                <h1 class="report-heading">WIA Workspace Intelligence Report</h1>
                 <div class="header-meta">
-                    Repository: <code>{ws_path}</code> | Schema Version: <strong>{version}</strong> | WIA Engine: <strong>{wia_ver}</strong>
+                    Repository: <code>{ws_path}</code> | Schema: <strong>{version}</strong> | WIA Engine: <strong>{wia_ver}</strong>
                 </div>
             </div>
             <div>
-                <span class="badge badge-info">Developer Intelligence Report</span>
+                <span class="badge badge-neutral">Developer Intelligence Dashboard</span>
             </div>
         </header>
 
         <!-- Executive Project Overview -->
-        <section id="executive-overview">
-            <div class="narrative-card">
-                <h2><a href="#executive-overview" class="anchor-link">#</a> Executive Repository Summary</h2>
+        <section class="report-section" id="executive-overview">
+            <div class="card narrative-card">
+                <div class="card-header">
+                    <h2 class="section-title"><a href="#executive-overview" class="anchor-link">#</a> Executive Repository Summary</h2>
+                    <span class="badge badge-info">{total_indexed} Files Indexed</span>
+                </div>
                 <p class="narrative-text">{project_narrative_p1}</p>
                 <p class="narrative-text">{project_narrative_p2}</p>
                 <p class="narrative-text">{project_narrative_p3}</p>
@@ -960,134 +2253,265 @@ class ReportGenerator:
                 <div class="card metric-card">
                     <h3>Indexed Files</h3>
                     <div class="metric-val">{total_indexed}</div>
-                    <div class="header-meta">Discovered: {total_discovered} | Ignored: {total_ignored}</div>
+                    <div class="card-meta">Discovered: {total_discovered} | Ignored: {total_ignored}</div>
                 </div>
                 <div class="card metric-card">
                     <h3>Declared Symbols</h3>
                     <div class="metric-val">{total_symbols}</div>
-                    <div class="header-meta">Classes, Functions, Methods</div>
+                    <div class="card-meta">Classes, Functions, Methods</div>
                 </div>
                 <div class="card metric-card">
                     <h3>Completed Batches</h3>
                     <div class="metric-val">{len(completed_batches)} / {len(batches)}</div>
-                    <div class="header-meta">{pct}% Complete</div>
+                    <div class="card-meta">{pct}% Coverage Completed</div>
                 </div>
                 <div class="card metric-card">
-                    <h3>Frameworks & Languages</h3>
-                    <div style="margin-top: 0.35rem; font-size: 0.85rem;">{framework_items_html}</div>
-                    <div style="margin-top: 0.25rem; font-size: 0.8rem;">{lang_items_html}</div>
+                    <h3>Risk Classification</h3>
+                    <div style="margin-top: 0.35rem; display: flex; gap: 0.3rem; flex-wrap: wrap;">
+                        <span class="badge badge-danger">High: {high_risk_count}</span>
+                        <span class="badge badge-warning">Med: {medium_risk_count}</span>
+                        <span class="badge badge-success">Low: {low_risk_count}</span>
+                    </div>
+                    <div class="card-meta">{framework_items_html}</div>
                 </div>
             </div>
         </section>
 
-        <!-- Installation & Usage Guide -->
-        <section id="installation">
-            <h2 class="section-heading"><a href="#installation" class="anchor-link">#</a> Installation & CLI Usage Commands</h2>
-            <div class="install-card">
-                <p class="narrative-text" style="margin-top:0;">
-                    Follow these commands to install, index, query, and run intelligence workflows on this workspace:
-                </p>
-
-                <div class="cmd-desc">1. Display WIA CLI help and available commands:</div>
-                <div class="cmd-box">
-                    <span class="cmd-text">wia --help</span>
-                    <button class="copy-btn" onclick="copyFromBox(this)">Copy</button>
+        <!-- ========================================== -->
+        <!-- INTERACTIVE DEPENDENCY GRAPH PANEL         -->
+        <!-- ========================================== -->
+        <section class="report-section" id="dependency-graph">
+            <div class="graph-panel">
+                <!-- Statistics Strip -->
+                <div class="graph-stats-bar">
+                    <div class="stat-pill"><span class="stat-label">Nodes:</span> <strong>{graph_payload['summary']['total_nodes']}</strong></div>
+                    <div class="stat-pill"><span class="stat-label">Edges:</span> <strong>{graph_payload['summary']['total_edges']}</strong></div>
+                    <div class="stat-pill"><span class="stat-label">Direct (Rank 1):</span> <strong>{graph_payload['summary']['direct_count']}</strong></div>
+                    <div class="stat-pill"><span class="stat-label">Indirect / Transitive:</span> <strong>{graph_payload['summary']['indirect_count']}</strong></div>
+                    <div class="stat-pill clickable" onclick="toggleHighlightCycles()" title="Click to highlight/filter cyclic loops">
+                        <span class="stat-label">Cycles:</span>
+                        {f'<span class="badge badge-warning">{cycle_count} cycles detected</span>' if cycle_count else '<span class="badge badge-success">0 (Acyclic)</span>'}
+                    </div>
                 </div>
 
-                <div class="cmd-desc">2. {cmd_install_desc}</div>
-                <div class="cmd-box">
-                    <span class="cmd-text">{cmd_install}</span>
-                    <button class="copy-btn" onclick="copyFromBox(this)">Copy</button>
+                <div class="graph-toolbar">
+                    <div class="graph-toolbar-left">
+                        <input type="text" id="graphSearchInput" class="search-input" placeholder="Search files, symbols, packages..." onkeyup="onGraphSearchChange()">
+                        <div class="btn-group" style="display:inline-flex; gap:0.25rem;">
+                            <button class="btn btn-sm btn-secondary active" id="btnViewArch" onclick="switchGraphView('arch', this)" title="Show File and Module architecture">Architecture</button>
+                            <button class="btn btn-sm btn-secondary" id="btnViewDetailed" onclick="switchGraphView('detailed', this)" title="Show all symbols and call edges">Symbols</button>
+                            <button class="btn btn-sm btn-secondary" id="btnViewDeps" onclick="switchGraphView('deps', this)" title="Show packages and manifests">Packages</button>
+                            <button class="btn btn-sm btn-secondary" id="btnViewFull" onclick="switchGraphView('full', this)" title="Show complete graph">Full Graph</button>
+                        </div>
+                    </div>
+                    <div class="graph-toolbar-right">
+                        <button class="btn btn-sm btn-secondary" id="btnDensityToggle" onclick="togglePeripheralCollapse()" title="Toggle collapsing peripheral low-ranked nodes">➖ Collapse Peripheral</button>
+                        <button class="btn btn-sm btn-secondary" id="btnLabelMode" onclick="toggleLabelMode()" title="Toggle smart ranked labels vs all labels">🏷️ Smart Labels</button>
+                        <button class="btn btn-sm btn-secondary" id="btnToggleLayout" onclick="toggleLayoutMode()" title="Toggle Top-to-Bottom / Left-to-Right / Force Layout">DAG: Top-Down</button>
+                        <button class="btn btn-sm btn-secondary" onclick="echartsFitView()" title="Fit View">⛶ Fit</button>
+                        <button class="btn btn-sm btn-secondary" onclick="echartsResetView()" title="Reset Graph">⟲ Reset</button>
+                    </div>
                 </div>
 
-                <div class="cmd-desc">3. Initialize and perform full workspace indexation:</div>
-                <div class="cmd-box">
-                    <span class="cmd-text">wia init && wia index</span>
-                    <button class="copy-btn" onclick="copyFromBox(this)">Copy</button>
+                <div class="graph-view-wrapper" id="graphContainerWrapper">
+                    <div class="graph-viewport" id="graphViewport">
+                        <div id="depEchartsChart"></div>
+                    </div>
+                    <div class="graph-details-sidebar" id="graphDetailsSidebar">
+                        <div class="details-panel-title">
+                            <span>Selected Entity</span>
+                            <span class="badge badge-neutral" id="sideNodeType">Info</span>
+                        </div>
+                        <div id="sidebarContentPlaceholder" class="empty-state" style="margin-top:1rem; padding:1.25rem 0.85rem;">
+                            Select a node to inspect its dependency relationships.
+                        </div>
+                        <div id="sidebarContentActive" style="display:none;">
+                            <div class="node-detail-field">
+                                <div class="node-detail-label">Entity Name</div>
+                                <div class="node-detail-value"><strong id="sideNodeName" style="color:var(--primary); font-size:0.95rem;">-</strong></div>
+                            </div>
+                            <div class="node-detail-field">
+                                <div class="node-detail-label">Visualization Priority</div>
+                                <div class="node-detail-value" id="sideNodeRank">-</div>
+                            </div>
+                            <div class="node-detail-field">
+                                <div class="node-detail-label">File / Path</div>
+                                <div class="node-detail-value"><code id="sideNodePath">-</code></div>
+                            </div>
+                            <div class="node-detail-field">
+                                <div class="node-detail-label">Impact Risk Classification</div>
+                                <div class="node-detail-value" id="sideNodeRisk">-</div>
+                            </div>
+                            <div class="node-detail-field" id="sideRoleField">
+                                <div class="node-detail-label">Architectural Role</div>
+                                <div class="node-detail-value" id="sideNodeRole">-</div>
+                            </div>
+                            <div class="node-detail-field" id="sidePurposeField">
+                                <div class="node-detail-label">Functional Purpose</div>
+                                <div class="node-detail-value" id="sideNodePurpose" style="font-size:0.8125rem; color:var(--text-secondary);">-</div>
+                            </div>
+                            <div class="node-detail-field" id="sideOutgoingField">
+                                <div class="node-detail-label">Dependencies (<span id="sideOutCount">0</span>)</div>
+                                <div class="node-detail-value" id="sideOutgoingList" style="font-size:0.8125rem;">-</div>
+                            </div>
+                            <div class="node-detail-field" id="sideIncomingField">
+                                <div class="node-detail-label">Dependents / Callers (<span id="sideInCount">0</span>)</div>
+                                <div class="node-detail-value" id="sideIncomingList" style="font-size:0.8125rem;">-</div>
+                            </div>
+                            <div class="node-detail-field" id="sideSymbolsField">
+                                <div class="node-detail-label">Declared AST Symbols (<span id="sideSymCount">0</span>)</div>
+                                <div class="node-detail-value" id="sideSymbolsList" style="font-size:0.8125rem;">-</div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
 
-                <div class="cmd-desc">4. Check workspace indexing status, batch health, and cache statistics:</div>
-                <div class="cmd-box">
-                    <span class="cmd-text">wia status</span>
-                    <button class="copy-btn" onclick="copyFromBox(this)">Copy</button>
-                </div>
-
-                <div class="cmd-desc">5. Query codebase intelligence and retrieve grounded evidence:</div>
-                <div class="cmd-box">
-                    <span class="cmd-text">wia ask "Explain the system architecture, entrypoints, and data flow of {ws_name}"</span>
-                    <button class="copy-btn" onclick="copyFromBox(this)">Copy</button>
-                </div>
-
-                <div class="cmd-desc">6. Perform Blast-Radius / Impact Analysis on project files:</div>
-                <div class="cmd-box">
-                    <span class="cmd-text">wia impact {sample_impact_file}</span>
-                    <button class="copy-btn" onclick="copyFromBox(this)">Copy</button>
-                </div>
-
-                <div class="cmd-desc">7. Regenerate standalone interactive HTML report:</div>
-                <div class="cmd-box">
-                    <span class="cmd-text">wia report --output wia-report.html</span>
-                    <button class="copy-btn" onclick="copyFromBox(this)">Copy</button>
-                </div>
-
-                <div class="cmd-desc">8. {cmd_runtime_desc}</div>
-                <div class="cmd-box">
-                    <span class="cmd-text">{cmd_runtime}</span>
-                    <button class="copy-btn" onclick="copyFromBox(this)">Copy</button>
+                <div class="graph-legend-bar">
+                    <div class="legend-items">
+                        <span class="legend-item"><span class="legend-dot" style="background:#1d4ed8;"></span> Target Entity</span>
+                        <span class="legend-item"><span class="legend-dot" style="background:#3b82f6;"></span> Direct (Rank 1)</span>
+                        <span class="legend-item"><span class="legend-dot" style="background:#0d9488;"></span> Core / High-Connectivity</span>
+                        <span class="legend-item"><span class="legend-dot" style="background:#94a3b8;"></span> Peripheral / Transitive</span>
+                        <span class="legend-item"><span class="legend-dot" style="background:#d97706;"></span> Manifest / Package</span>
+                        <span class="legend-item"><span class="legend-line" style="background:#3b82f6;"></span> Imports</span>
+                        <span class="legend-item"><span class="legend-line" style="background:#6366f1;"></span> Calls</span>
+                        <span class="legend-item"><span class="legend-line" style="background:#64748b; border-top:1px dashed #64748b; height:0;"></span> Defines</span>
+                        <span class="legend-item"><span class="legend-line" style="background:#8b5cf6;"></span> Inherits</span>
+                    </div>
+                    <div>
+                        <span>💡 Scroll to Zoom • Drag to Pan • Click Node to Focus</span>
+                    </div>
                 </div>
             </div>
+        </section>
+
+        <!-- Project Execution & Developer Commands Guide -->
+        <section class="report-section" id="installation">
+            <details class="section-panel card" open>
+                <summary class="section-panel-header">
+                    <div class="header-left">
+                        <span class="dropdown-chevron">▶</span>
+                        <a href="#installation" class="anchor-link" title="Direct link to Developer Commands" onclick="event.stopPropagation()">#</a>
+                        <h2 class="section-title">Project Execution & Developer Commands</h2>
+                        <span class="badge badge-neutral">{len(project_cmds)} Detected</span>
+                    </div>
+                </summary>
+                <div class="panel-body">
+                    <p class="narrative-text" style="margin-bottom: 1rem;">
+                        Verified setup, installation, build, test, and runtime commands detected from workspace manifests:
+                    </p>
+
+                    {project_commands_html}
+
+                    <details class="collapsible-details" style="margin-top: 1.25rem; padding-top: 0.75rem; border-top: 1px solid var(--border-subtle);">
+                        <summary>⚡ WIA Workspace Inspection & Agent Commands</summary>
+                        <div style="margin-top: 0.75rem;">
+                            <div class="cmd-item">
+                                <div class="cmd-desc">Query repository architecture, data flow, and components:</div>
+                                <div class="cmd-box">
+                                    <span class="cmd-text">wia ask "Explain the system architecture, entrypoints, and data flow of {ws_name}"</span>
+                                    <button class="btn btn-sm btn-secondary copy-btn" onclick="copyFromBox(this)">Copy</button>
+                                </div>
+                            </div>
+                            <div class="cmd-item">
+                                <div class="cmd-desc">Perform refactoring blast-radius and impact analysis on project files:</div>
+                                <div class="cmd-box">
+                                    <span class="cmd-text">wia impact {sample_impact_file}</span>
+                                    <button class="btn btn-sm btn-secondary copy-btn" onclick="copyFromBox(this)">Copy</button>
+                                </div>
+                            </div>
+                            <div class="cmd-item">
+                                <div class="cmd-desc">Regenerate this standalone interactive HTML report:</div>
+                                <div class="cmd-box">
+                                    <span class="cmd-text">wia report --output wia-report.html</span>
+                                    <button class="btn btn-sm btn-secondary copy-btn" onclick="copyFromBox(this)">Copy</button>
+                                </div>
+                            </div>
+                        </div>
+                    </details>
+                </div>
+            </details>
         </section>
 
         <!-- Component Architecture Breakdown -->
-        <section id="components">
-            <h2 class="section-heading"><a href="#components" class="anchor-link">#</a> System Component Architecture</h2>
-            <div class="grid-2">
-                {components_html}
-            </div>
+        <section class="report-section" id="components">
+            <details class="section-panel card" open>
+                <summary class="section-panel-header">
+                    <div class="header-left">
+                        <span class="dropdown-chevron">▶</span>
+                        <a href="#components" class="anchor-link" title="Direct link to Component Architecture" onclick="event.stopPropagation()">#</a>
+                        <h2 class="section-title">System Component Architecture</h2>
+                        <span class="badge badge-info">{len(components_map)} Component Roles</span>
+                    </div>
+                </summary>
+                <div class="panel-body">
+                    <div class="grid-2">
+                        {components_html}
+                    </div>
+                </div>
+            </details>
         </section>
 
         <!-- Accumulated Batch Intelligence Log -->
-        <section id="batch-narratives">
-            <h2 class="section-heading"><a href="#batch-narratives" class="anchor-link">#</a> Accumulated Batch Analysis Log ({len(batches)} Batches)</h2>
-            <div class="card" style="margin-bottom: 1.25rem;">
-                <div style="display:flex; justify-content:space-between; align-items:center;">
-                    <span>Accumulated Batch Progress ({len(completed_batches)} of {len(batches)} Batches Completed)</span>
-                    <strong>{pct}%</strong>
-                </div>
-                <div class="progress-bar-bg">
-                    <div class="progress-bar-fill" style="width: {pct}%;"></div>
-                </div>
-                <div class="grid-4" style="margin-top: 0.75rem; margin-bottom: 0;">
-                    <div><span class="badge badge-success">Completed: {len(completed_batches)}</span></div>
-                    <div><span class="badge badge-warning">Running: {len(running_batches)}</span></div>
-                    <div><span class="badge badge-outline">Pending: {len(pending_batches)}</span></div>
-                    <div><span class="badge badge-danger">Failed: {len(failed_batches)}</span></div>
-                </div>
-            </div>
+        <section class="report-section" id="batch-narratives">
+            <details class="section-panel card" open>
+                <summary class="section-panel-header">
+                    <div class="header-left">
+                        <span class="dropdown-chevron">▶</span>
+                        <a href="#batch-narratives" class="anchor-link" title="Direct link to Batch Analysis Log" onclick="event.stopPropagation()">#</a>
+                        <h2 class="section-title">Accumulated Batch Analysis Log</h2>
+                        <span class="badge badge-info">{len(batches)} Batches</span>
+                        <span class="badge badge-success">{pct}% Coverage</span>
+                    </div>
+                </summary>
+                <div class="panel-body">
+                    <div class="card" style="background: var(--surface-alt); margin-bottom: 1.25rem;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; font-size:0.875rem;">
+                            <span>Accumulated Progress ({len(completed_batches)} of {len(batches)} Batches Completed)</span>
+                            <strong>{pct}%</strong>
+                        </div>
+                        <div class="progress-bar-bg">
+                            <div class="progress-bar-fill" style="width: {pct}%;"></div>
+                        </div>
+                        <div style="display:flex; gap:0.5rem; margin-top:0.75rem; flex-wrap:wrap;">
+                            <span class="badge badge-success">Completed: {len(completed_batches)}</span>
+                            <span class="badge badge-warning">Running: {len(running_batches)}</span>
+                            <span class="badge badge-neutral">Pending: {len(pending_batches)}</span>
+                            {f'<span class="badge badge-danger">Failed: {len(failed_batches)}</span>' if failed_batches else ''}
+                        </div>
+                    </div>
 
-            <div>
-                {batch_narratives_html}
-            </div>
+                    <div>
+                        {batch_narratives_html}
+                    </div>
+                </div>
+            </details>
         </section>
 
         <!-- File-by-File Technical Intelligence Narratives -->
-        <section id="file-narratives">
-            <h2 class="section-heading"><a href="#file-narratives" class="anchor-link">#</a> File-by-File Codebase Intelligence ({len(files_data)} Files)</h2>
-            
-            <div class="search-container">
-                <input type="text" id="fileSearch" class="search-input" placeholder="Search repository files, symbols, modules, architectural roles..." onkeyup="filterFiles()">
-            </div>
+        <section class="report-section" id="file-narratives">
+            <details class="section-panel card" open>
+                <summary class="section-panel-header">
+                    <div class="header-left">
+                        <span class="dropdown-chevron">▶</span>
+                        <a href="#file-narratives" class="anchor-link" title="Direct link to File Intelligence" onclick="event.stopPropagation()">#</a>
+                        <h2 class="section-title">File-by-File Codebase Intelligence</h2>
+                        <span class="badge badge-info">{len(files_data)} Files</span>
+                    </div>
+                </summary>
+                <div class="panel-body">
+                    <div style="margin-bottom: 1rem; display:flex; gap:0.75rem; flex-wrap:wrap;">
+                        <input type="text" id="fileSearch" class="search-input" style="flex:1;" placeholder="Filter files by path, symbol, module role..." onkeyup="filterFiles()">
+                        <select id="languageSelect" class="search-input" style="min-width:200px;" onchange="onLanguageSelect(this.value)">
+                            {language_select_options_html}
+                        </select>
+                    </div>
 
-            <div class="lang-dropdown-wrapper">
-                <label for="languageSelect" class="dropdown-label">Jump to Language Dropdown:</label>
-                <select id="languageSelect" class="lang-select" onchange="onLanguageSelect(this.value)">
-                    {language_select_options_html}
-                </select>
-            </div>
-
-            <div id="fileList">
-                {grouped_files_html}
-            </div>
+                    <div id="fileList">
+                        {grouped_files_html}
+                    </div>
+                </div>
+            </details>
         </section>
 
         <!-- Security Findings (if present) -->
@@ -1099,6 +2523,7 @@ class ReportGenerator:
 
     <script>
         window.WIA_REPORT_DATA = {report_json_data};
+        window.WIA_GRAPH_DATA = {graph_json_data};
 
         function copyFromBox(btn) {{
             const box = btn.closest('.cmd-box');
@@ -1110,12 +2535,10 @@ class ReportGenerator:
             navigator.clipboard.writeText(text).then(() => {{
                 const originalText = btn.innerText;
                 btn.innerText = 'Copied!';
-                btn.style.background = '#34d399';
-                btn.style.color = '#0b0f19';
+                btn.classList.add('btn-primary');
                 setTimeout(() => {{
                     btn.innerText = originalText;
-                    btn.style.background = '';
-                    btn.style.color = '';
+                    btn.classList.remove('btn-primary');
                 }}, 2000);
             }}).catch(() => {{
                 const el = document.createElement('textarea');
@@ -1137,6 +2560,12 @@ class ReportGenerator:
 
             if (!langSlug) return;
 
+            const parentSection = document.getElementById('file-narratives');
+            if (parentSection) {{
+                const details = parentSection.querySelector('details');
+                if (details) details.open = true;
+            }}
+
             const targetPanel = document.getElementById('lang-' + langSlug);
             if (targetPanel) {{
                 targetPanel.open = true;
@@ -1156,7 +2585,7 @@ class ReportGenerator:
         function filterFiles() {{
             const input = document.getElementById('fileSearch').value.toLowerCase().trim();
             const cards = document.querySelectorAll('.file-card');
-            const panels = document.querySelectorAll('.language-dropdown-panel');
+            const panels = document.querySelectorAll('[data-language-group]');
 
             if (!input) {{
                 cards.forEach(c => c.style.display = 'block');
@@ -1185,7 +2614,639 @@ class ReportGenerator:
             }});
         }}
 
-        // Auto-refresh on data update
+        function filterDepEcosystem(eco, btn) {{
+            document.querySelectorAll('.dep-filter-btn').forEach(b => b.classList.remove('active'));
+            if (btn) btn.classList.add('active');
+
+            const rows = document.querySelectorAll('#dependencies table tbody tr');
+            rows.forEach(r => {{
+                if (eco === 'all') {{
+                    r.style.display = '';
+                }} else {{
+                    const ecoBadge = r.querySelector('.badge-info');
+                    const text = ecoBadge ? ecoBadge.innerText.toLowerCase() : '';
+                    r.style.display = (text === eco.toLowerCase()) ? '' : 'none';
+                }}
+            }});
+        }}
+
+        // Smooth navigation & automatic details expansion
+        function openTargetDetails(targetId) {{
+            if (!targetId) return;
+            const el = document.getElementById(targetId);
+            if (!el) return;
+
+            if (el.tagName && el.tagName.toLowerCase() === 'details') {{
+                el.open = true;
+            }}
+            let p = el.parentElement;
+            while (p) {{
+                if (p.tagName && p.tagName.toLowerCase() === 'details') {{
+                    p.open = true;
+                }}
+                p = p.parentElement;
+            }}
+            el.scrollIntoView({{ behavior: 'smooth', block: 'start' }});
+        }}
+
+        document.querySelectorAll('a[href^="#"]').forEach(a => {{
+            a.addEventListener('click', function(e) {{
+                const id = this.getAttribute('href').substring(1);
+                if (id) {{
+                    openTargetDetails(id);
+                }}
+            }});
+        }});
+
+        window.addEventListener('hashchange', () => {{
+            const hash = window.location.hash.replace('#', '');
+            if (hash) openTargetDetails(hash);
+        }});
+
+        // Scrollspy for sidebar menu
+        function initScrollSpy() {{
+            const sections = document.querySelectorAll('section[id]');
+            const navLinks = document.querySelectorAll('.nav-menu .nav-item a');
+            const mainEl = document.getElementById('mainContainer');
+            if (!mainEl) return;
+
+            mainEl.addEventListener('scroll', () => {{
+                let current = '';
+                const scrollPos = mainEl.scrollTop + 140;
+                sections.forEach(sec => {{
+                    const top = sec.offsetTop;
+                    const height = sec.offsetHeight;
+                    if (scrollPos >= top && scrollPos < top + height) {{
+                        current = sec.getAttribute('id');
+                    }}
+                }});
+
+                if (current) {{
+                    navLinks.forEach(link => {{
+                        link.classList.remove('active');
+                        if (link.getAttribute('href') === '#' + current) {{
+                            link.classList.add('active');
+                        }}
+                    }});
+                }}
+            }});
+        }}
+
+        // =========================================================
+        // Advanced Ranked Interactive Dependency Graph Engine
+        // =========================================================
+        let graphChart = null;
+        const MAX_INITIAL_NODES = 50;
+
+        const graphState = {{
+            viewMode: 'arch',       // 'arch', 'detailed', 'deps', 'full'
+            layoutMode: 'dag-tb',    // 'dag-tb' (top-down), 'dag-lr' (left-right), 'force'
+            collapsePeripheral: true, // Collapse Rank 4+ nodes when count > 30
+            smartLabels: true,       // Only render labels on Target, Direct, Core
+            searchTerm: '',
+            selectedNodeId: null,
+            highlightCycles: false,
+            expandedGroups: new Set(),
+            rawNodes: [],
+            rawEdges: []
+        }};
+
+        function initGraphEngine() {{
+            const container = document.getElementById('depEchartsChart');
+            if (!container) return;
+
+            const graphData = window.WIA_GRAPH_DATA || {{}};
+            const nodes = graphData.nodes || [];
+            const edges = graphData.edges || [];
+
+            if (nodes.length === 0) {{
+                container.innerHTML = '<div class="empty-state" style="margin:2rem;">Dependency graph unavailable<br><span style="font-size:0.8rem; color:#718096;">No graph relationships were returned for this analysis.</span></div>';
+                return;
+            }}
+
+            if (typeof echarts === 'undefined') {{
+                const wrapper = document.getElementById('graphContainerWrapper');
+                if (wrapper && !wrapper.querySelector('.offline-notice')) {{
+                    const notice = document.createElement('div');
+                    notice.className = 'offline-notice';
+                    notice.innerHTML = '<p><strong>Dependency Graph Renderer Notice</strong></p><p style="color:#718096; font-size:0.825rem;">Interactive canvas chart is loading or operating in offline fallback mode.</p>';
+                    wrapper.appendChild(notice);
+                }}
+                return;
+            }}
+
+            if (!graphChart) {{
+                graphChart = echarts.init(container, null, {{ renderer: 'canvas' }});
+                window.addEventListener('resize', () => {{
+                    if (graphChart) graphChart.resize();
+                }});
+                if (window.ResizeObserver) {{
+                    const ro = new ResizeObserver(() => {{
+                        if (graphChart) graphChart.resize();
+                    }});
+                    ro.observe(container);
+                }}
+
+                graphChart.on('click', function(params) {{
+                    if (params.dataType === 'node') {{
+                        if (params.data.isGroupNode) {{
+                            toggleGroupExpansion(params.data.groupId);
+                        }} else {{
+                            selectGraphNode(params.data.id);
+                        }}
+                    }}
+                }});
+            }}
+
+            graphState.rawNodes = nodes;
+            graphState.rawEdges = edges;
+
+            // Auto-select Target node if present
+            const targetNode = nodes.find(n => n.vis_rank === 0);
+            if (targetNode) {{
+                selectGraphNode(targetNode.id);
+            }}
+
+            renderGraphView();
+        }}
+
+        function toggleGroupExpansion(groupId) {{
+            if (graphState.expandedGroups.has(groupId)) {{
+                graphState.expandedGroups.delete(groupId);
+            }} else {{
+                graphState.expandedGroups.add(groupId);
+            }}
+            renderGraphView();
+        }}
+
+        function togglePeripheralCollapse() {{
+            graphState.collapsePeripheral = !graphState.collapsePeripheral;
+            const btn = document.getElementById('btnDensityToggle');
+            if (btn) {{
+                btn.innerText = graphState.collapsePeripheral ? '➖ Collapse Peripheral' : '➕ Expand All';
+            }}
+            renderGraphView();
+        }}
+
+        function toggleLabelMode() {{
+            graphState.smartLabels = !graphState.smartLabels;
+            const btn = document.getElementById('btnLabelMode');
+            if (btn) {{
+                btn.innerText = graphState.smartLabels ? '🏷️ Smart Labels' : '🏷️ All Labels';
+            }}
+            renderGraphView();
+        }}
+
+        function toggleHighlightCycles() {{
+            graphState.highlightCycles = !graphState.highlightCycles;
+            renderGraphView();
+        }}
+
+        function computeHierarchicalLayout(nodes, edges, direction) {{
+            // Direction: 'tb' (Top-to-Bottom) or 'lr' (Left-to-Right)
+            // Group nodes by visual hierarchy rank (Layer 0 = Target, Layer 1 = Direct, Layer 2 = Secondary, Layer 3 = Core, Layer 4 = Peripheral/Groups)
+            const layers = {{ 0: [], 1: [], 2: [], 3: [], 4: [] }};
+
+            nodes.forEach(n => {{
+                const r = Math.min(4, Math.max(0, n.vis_rank !== undefined ? n.vis_rank : 4));
+                layers[r].push(n);
+            }});
+
+            const layerSpacing = direction === 'tb' ? 170 : 250;
+            const nodeSpacing = direction === 'tb' ? 200 : 54;
+
+            Object.keys(layers).forEach(layerKey => {{
+                const layerIdx = Number(layerKey);
+                const group = layers[layerIdx];
+                if (!group.length) return;
+
+                const totalBreadth = (group.length - 1) * nodeSpacing;
+                const startBreadth = -(totalBreadth / 2);
+
+                group.forEach((node, idx) => {{
+                    const breadthPos = startBreadth + (idx * nodeSpacing);
+                    const depthPos = layerIdx * layerSpacing;
+
+                    if (direction === 'tb') {{
+                        node.x = breadthPos;
+                        node.y = depthPos;
+                    }} else {{
+                        node.x = depthPos;
+                        node.y = breadthPos;
+                    }}
+                }});
+            }});
+        }}
+
+        function renderGraphView() {{
+            if (!graphChart) return;
+
+            const mode = graphState.viewMode;
+            const search = graphState.searchTerm.toLowerCase();
+            const doCollapse = graphState.collapsePeripheral && graphState.rawNodes.length > 30;
+
+            // 1. Filter Nodes based on viewMode
+            let filteredNodes = graphState.rawNodes.filter(n => {{
+                if (mode === 'arch') {{
+                    return n.type === 'file' || n.type === 'manifest';
+                }} else if (mode === 'deps') {{
+                    return n.type === 'file' || n.type === 'manifest' || n.type === 'package';
+                }} else if (mode === 'detailed') {{
+                    return n.type === 'file' || n.type === 'class' || n.type === 'function' || n.type === 'method';
+                }}
+                return true; // 'full'
+            }});
+
+            // 2. Peripheral Node Grouping / Collapsing
+            let displayNodes = [];
+            let displayEdges = [];
+            let collapsedPeripheralNodes = [];
+
+            if (doCollapse) {{
+                filteredNodes.forEach(n => {{
+                    // If peripheral rank (>= 4) and not target/direct and not expanded
+                    const isExpanded = graphState.expandedGroups.has('group-peripheral');
+                    if (n.vis_rank >= 4 && !isExpanded && !search) {{
+                        collapsedPeripheralNodes.push(n);
+                    }} else {{
+                        displayNodes.push(n);
+                    }}
+                }});
+
+                if (collapsedPeripheralNodes.length > 0) {{
+                    const groupNode = {{
+                        id: 'group-peripheral',
+                        isGroupNode: true,
+                        groupId: 'group-peripheral',
+                        label: `+ ${{collapsedPeripheralNodes.length}} Peripheral Entities (Click to Expand)`,
+                        type: 'cluster',
+                        vis_rank: 4,
+                        vis_rank_label: 'COLLAPSED GROUP',
+                        metadata: {{
+                            role: 'Grouped Peripheral Components',
+                            purpose: 'Contains transitive and low-connectivity peripheral modules.'
+                        }}
+                    }};
+                    displayNodes.push(groupNode);
+                }}
+            }} else {{
+                displayNodes = filteredNodes;
+            }}
+
+            const activeNodeSet = new Set(displayNodes.map(n => n.id));
+
+            // Map edges to active/group nodes
+            graphState.rawEdges.forEach(e => {{
+                let s = e.source;
+                let t = e.target;
+
+                if (!activeNodeSet.has(s) && doCollapse && collapsedPeripheralNodes.some(n => n.id === s)) {{
+                    s = 'group-peripheral';
+                }}
+                if (!activeNodeSet.has(t) && doCollapse && collapsedPeripheralNodes.some(n => n.id === t)) {{
+                    t = 'group-peripheral';
+                }}
+
+                if (activeNodeSet.has(s) && activeNodeSet.has(t) && s !== t) {{
+                    displayEdges.push({{
+                        source: s,
+                        target: t,
+                        relation: e.relation,
+                        edge_priority: e.edge_priority || 2,
+                        edgeData: e
+                    }});
+                }}
+            }});
+
+            // Layout coordinates
+            if (graphState.layoutMode === 'dag-tb') {{
+                computeHierarchicalLayout(displayNodes, displayEdges, 'tb');
+            }} else if (graphState.layoutMode === 'dag-lr') {{
+                computeHierarchicalLayout(displayNodes, displayEdges, 'lr');
+            }}
+
+            // Convert to ECharts options
+            const echartsNodes = displayNodes.map(n => {{
+                const isSelected = (n.id === graphState.selectedNodeId);
+                const isSearchMatch = search && (
+                    (n.label && n.label.toLowerCase().includes(search)) ||
+                    (n.file_path && n.file_path.toLowerCase().includes(search)) ||
+                    (n.id && n.id.toLowerCase().includes(search))
+                );
+
+                let size = 18;
+                let color = '#2563eb';
+                let borderColor = '#1d4ed8';
+
+                if (n.isGroupNode) {{
+                    size = 26;
+                    color = '#475569';
+                    borderColor = '#334155';
+                }} else if (n.vis_rank === 0) {{
+                    size = 32;
+                    color = '#1d4ed8';
+                    borderColor = '#172554';
+                }} else if (n.vis_rank === 1) {{
+                    size = 22;
+                    color = '#3b82f6';
+                    borderColor = '#1d4ed8';
+                }} else if (n.vis_rank === 2) {{
+                    size = 17;
+                    color = '#60a5fa';
+                    borderColor = '#3b82f6';
+                }} else if (n.vis_rank === 3) {{
+                    size = 19;
+                    color = '#0d9488';
+                    borderColor = '#0f766e';
+                }} else if (n.vis_rank >= 4) {{
+                    size = 12;
+                    color = '#94a3b8';
+                    borderColor = '#cbd5e1';
+                }}
+
+                if (n.type === 'package' || n.type === 'manifest') {{
+                    color = '#d97706';
+                    borderColor = '#b45309';
+                }}
+
+                // Smart Labeling
+                let showLabel = false;
+                if (!graphState.smartLabels || isSelected || isSearchMatch || n.vis_rank <= 1 || n.isGroupNode) {{
+                    showLabel = true;
+                }}
+
+                const opacity = (search && !isSearchMatch) ? 0.25 : 1.0;
+
+                return {{
+                    id: n.id,
+                    name: n.id,
+                    value: n.label,
+                    symbolSize: isSelected ? (size + 8) : size,
+                    x: n.x,
+                    y: n.y,
+                    draggable: true,
+                    itemStyle: {{
+                        color: color,
+                        borderColor: isSelected ? '#172033' : borderColor,
+                        borderWidth: isSelected ? 3 : (n.isGroupNode ? 2 : 1.5),
+                        borderType: n.isGroupNode ? 'dashed' : 'solid',
+                        opacity: opacity,
+                        shadowBlur: isSelected ? 10 : 0,
+                        shadowColor: 'rgba(0,0,0,0.25)'
+                    }},
+                    label: {{
+                        show: showLabel,
+                        position: graphState.layoutMode === 'dag-tb' ? 'bottom' : 'right',
+                        formatter: function() {{
+                            return n.label.length > 22 ? n.label.substring(0, 20) + '…' : n.label;
+                        }},
+                        color: '#172033',
+                        fontSize: (n.vis_rank === 0 || isSelected) ? 12 : 11,
+                        fontWeight: (n.vis_rank === 0 || isSelected) ? 700 : 500
+                    }},
+                    nodeData: n
+                }};
+            }});
+
+            const echartsLinks = displayEdges.map(e => {{
+                let lineColor = '#cbd5e1';
+                let width = 1.0;
+                let opacity = 0.4;
+
+                if (e.edge_priority === 1) {{
+                    lineColor = '#2563eb';
+                    width = 2.2;
+                    opacity = 0.85;
+                }} else if (e.edge_priority === 2) {{
+                    lineColor = '#64748b';
+                    width = 1.4;
+                    opacity = 0.6;
+                }}
+
+                if (e.relation === 'CALLS') {{
+                    lineColor = '#6366f1';
+                }} else if (e.relation === 'INHERITS') {{
+                    lineColor = '#8b5cf6';
+                }} else if (e.relation === 'DEFINES') {{
+                    lineColor = '#94a3b8';
+                }}
+
+                return {{
+                    source: e.source,
+                    target: e.target,
+                    lineStyle: {{
+                        color: lineColor,
+                        width: width,
+                        curveness: 0.18,
+                        opacity: opacity
+                    }},
+                    edgeData: e
+                }};
+            }});
+
+            const option = {{
+                backgroundColor: 'transparent',
+                tooltip: {{
+                    trigger: 'item',
+                    backgroundColor: '#172033',
+                    borderColor: '#334155',
+                    borderWidth: 1,
+                    padding: [8, 12],
+                    textStyle: {{ color: '#f8fafc', fontSize: 12 }},
+                    formatter: function(params) {{
+                        if (params.dataType === 'edge') {{
+                            const e = params.data.edgeData;
+                            return `<div style="font-size:11px; color:#94a3b8;">Relationship Edge: <strong>${{htmlEscape(e.relation)}}</strong></div>`;
+                        }}
+                        const n = params.data.nodeData;
+                        if (!n) return params.name;
+                        if (n.isGroupNode) {{
+                            return `<strong>${{htmlEscape(n.label)}}</strong><div style="font-size:11px; color:#94a3b8; margin-top:3px;">Click node to expand all grouped items</div>`;
+                        }}
+                        const rankTag = `<span style="font-size:10px; background:#2563eb; color:#fff; padding:1px 5px; border-radius:3px; font-weight:bold;">${{n.vis_rank_label || 'NODE'}}</span>`;
+                        return `<div style="display:flex; justify-content:space-between; gap:10px; align-items:center;">
+                                    <strong style="color:#60a5fa;">${{htmlEscape(n.label)}}</strong>
+                                    ${{rankTag}}
+                                </div>
+                                <div style="font-size:11px; color:#cbd5e1; margin-top:3px;">Type: <strong>${{htmlEscape(n.type)}}</strong></div>
+                                ${{n.file_path ? `<div style="font-size:10.5px; color:#94a3b8;">Path: ${{htmlEscape(n.file_path)}}</div>` : ''}}`;
+                    }}
+                }},
+                series: [{{
+                    type: 'graph',
+                    layout: graphState.layoutMode === 'force' ? 'force' : 'none',
+                    data: echartsNodes,
+                    links: echartsLinks,
+                    roam: true,
+                    draggable: true,
+                    edgeSymbol: ['none', 'arrow'],
+                    edgeSymbolSize: [4, 7],
+                    scaleLimit: {{ min: 0.15, max: 4.0 }},
+                    force: {{
+                        repulsion: 240,
+                        edgeLength: [60, 150],
+                        gravity: 0.08,
+                        friction: 0.6
+                    }},
+                    emphasis: {{
+                        focus: 'adjacency',
+                        lineStyle: {{ width: 3, opacity: 1 }}
+                    }}
+                }}]
+            }};
+
+            graphChart.setOption(option, true);
+        }}
+
+        function selectGraphNode(nodeId) {{
+            graphState.selectedNodeId = nodeId;
+            const node = graphState.rawNodes.find(n => n.id === nodeId);
+            if (!node) return;
+
+            const placeholder = document.getElementById('sidebarContentPlaceholder');
+            const active = document.getElementById('sidebarContentActive');
+            if (placeholder) placeholder.style.display = 'none';
+            if (active) active.style.display = 'block';
+
+            const nameEl = document.getElementById('sideNodeName');
+            const rankEl = document.getElementById('sideNodeRank');
+            const pathEl = document.getElementById('sideNodePath');
+            const typeEl = document.getElementById('sideNodeType');
+            const riskEl = document.getElementById('sideNodeRisk');
+            const roleEl = document.getElementById('sideNodeRole');
+            const purposeEl = document.getElementById('sideNodePurpose');
+
+            if (nameEl) nameEl.innerText = node.label;
+            if (pathEl) pathEl.innerText = node.file_path || 'Workspace Root';
+            if (typeEl) typeEl.innerText = node.type.toUpperCase();
+
+            if (rankEl) {{
+                const rLabel = node.vis_rank_label || 'Rank ' + node.vis_rank;
+                const rColor = node.vis_rank === 0 ? 'badge-info' : node.vis_rank === 1 ? 'badge-primary' : 'badge-neutral';
+                rankEl.innerHTML = `<span class="badge ${{rColor}}">${{rLabel}} (Priority Score: ${{node.vis_score || '-'}})</span>`;
+            }}
+
+            const risk = (node.metadata && node.metadata.risk) ? node.metadata.risk : 'LOW';
+            const riskBadgeClass = risk === 'HIGH' ? 'badge-danger' : risk === 'MEDIUM' ? 'badge-warning' : 'badge-success';
+            if (riskEl) {{
+                riskEl.innerHTML = `<span class="badge ${{riskBadgeClass}}">${{risk}} RISK</span>`;
+            }}
+
+            if (roleEl) roleEl.innerText = (node.metadata && node.metadata.role) ? node.metadata.role : 'Application Component';
+            if (purposeEl) purposeEl.innerText = (node.metadata && node.metadata.purpose) ? node.metadata.purpose : 'Static code analysis entity in workspace dependency tree.';
+
+            // Outgoing edges
+            const outgoing = graphState.rawEdges.filter(e => e.source === nodeId);
+            const outCount = document.getElementById('sideOutCount');
+            const outList = document.getElementById('sideOutgoingList');
+            if (outCount) outCount.innerText = outgoing.length;
+            if (outList) {{
+                if (outgoing.length === 0) {{
+                    outList.innerHTML = '<span class="text-muted">None</span>';
+                }} else {{
+                    outList.innerHTML = outgoing.slice(0, 10).map(e => {{
+                        const targetLabel = e.target.split(':').pop();
+                        return `<a class="clickable-node-link" onclick="selectGraphNode('${{e.target}}')">→ <strong>${{htmlEscape(e.relation)}}</strong>: <code>${{htmlEscape(targetLabel)}}</code></a>`;
+                    }}).join('');
+                }}
+            }}
+
+            // Incoming edges
+            const incoming = graphState.rawEdges.filter(e => e.target === nodeId);
+            const inCount = document.getElementById('sideInCount');
+            const inList = document.getElementById('sideIncomingList');
+            if (inCount) inCount.innerText = incoming.length;
+            if (inList) {{
+                if (incoming.length === 0) {{
+                    inList.innerHTML = '<span class="text-muted">None</span>';
+                }} else {{
+                    inList.innerHTML = incoming.slice(0, 10).map(e => {{
+                        const sourceLabel = e.source.split(':').pop();
+                        return `<a class="clickable-node-link" onclick="selectGraphNode('${{e.source}}')">← <strong>${{htmlEscape(e.relation)}}</strong> from: <code>${{htmlEscape(sourceLabel)}}</code></a>`;
+                    }}).join('');
+                }}
+            }}
+
+            // Declared symbols
+            const syms = (node.metadata && node.metadata.symbols) ? node.metadata.symbols : [];
+            const symCount = document.getElementById('sideSymCount');
+            const symList = document.getElementById('sideSymbolsList');
+            const symField = document.getElementById('sideSymbolsField');
+            if (symCount) symCount.innerText = syms.length;
+            if (symField) symField.style.display = syms.length ? 'block' : 'none';
+            if (symList && syms.length) {{
+                symList.innerHTML = syms.slice(0, 8).map(s => `<div><span class="badge badge-neutral" style="font-size:0.65rem;">${{htmlEscape(s.type)}}</span> <code>${{htmlEscape(s.name)}}</code> (L${{s.line}})</div>`).join('');
+            }}
+
+            renderGraphView();
+        }}
+
+        function switchGraphView(mode, btn) {{
+            graphState.viewMode = mode;
+            document.querySelectorAll('.graph-toolbar .btn-group button').forEach(b => {{
+                if (b.id && b.id.startsWith('btnView')) b.classList.remove('active');
+            }});
+            if (btn) btn.classList.add('active');
+            renderGraphView();
+        }}
+
+        function toggleLayoutMode() {{
+            const btn = document.getElementById('btnToggleLayout');
+            if (graphState.layoutMode === 'dag-tb') {{
+                graphState.layoutMode = 'dag-lr';
+                if (btn) btn.innerText = 'DAG: Left-Right';
+            }} else if (graphState.layoutMode === 'dag-lr') {{
+                graphState.layoutMode = 'force';
+                if (btn) btn.innerText = 'Force-Directed';
+            }} else {{
+                graphState.layoutMode = 'dag-tb';
+                if (btn) btn.innerText = 'DAG: Top-Down';
+            }}
+            renderGraphView();
+        }}
+
+        function echartsFitView() {{
+            if (!graphChart) return;
+            graphChart.dispatchAction({{ type: 'restore' }});
+        }}
+
+        function echartsResetView() {{
+            graphState.searchTerm = '';
+            graphState.selectedNodeId = null;
+            graphState.expandedGroups.clear();
+            const input = document.getElementById('graphSearchInput');
+            if (input) input.value = '';
+            renderGraphView();
+            echartsFitView();
+        }}
+
+        function onGraphSearchChange() {{
+            const input = document.getElementById('graphSearchInput');
+            graphState.searchTerm = input ? input.value : '';
+            renderGraphView();
+
+            if (graphState.searchTerm) {{
+                const match = graphState.rawNodes.find(n =>
+                    (n.label && n.label.toLowerCase().includes(graphState.searchTerm.toLowerCase())) ||
+                    (n.id && n.id.toLowerCase().includes(graphState.searchTerm.toLowerCase()))
+                );
+                if (match) {{
+                    selectGraphNode(match.id);
+                }}
+            }}
+        }}
+
+        function htmlEscape(str) {{
+            if (!str) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }}
+
+        // Auto-refresh dynamic updates
         async function checkForDynamicUpdates() {{
             try {{
                 const res = await fetch('.wia/report_data.json?t=' + Date.now());
@@ -1201,6 +3262,8 @@ class ReportGenerator:
         window.addEventListener('DOMContentLoaded', () => {{
             checkForDynamicUpdates();
             setInterval(checkForDynamicUpdates, 3000);
+            initScrollSpy();
+            setTimeout(initGraphEngine, 40);
         }});
     </script>
 </body>
@@ -1208,3 +3271,4 @@ class ReportGenerator:
 """
         target_file.write_text(html_content, encoding="utf-8")
         return target_file
+
