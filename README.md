@@ -145,22 +145,19 @@ $$
 ### Decision Boundary & Fallback Threshold
 
 $$
-\text{Route}(Q) =
+\operatorname{Route}(Q) =
 \begin{cases}
-\displaystyle
-\arg\max_{C} \text{JEV}(Q, C)
-& \text{if }
-\max_{C} \text{JEV}(Q, C) \geq \theta_{\text{route}}
-\land \text{IsDeterministic}(Q)
+\arg\max_{C}\operatorname{JEV}(Q,C),
+& \text{if } \max_{C}\operatorname{JEV}(Q,C) \geq \theta_{\mathrm{route}}
+\land \operatorname{IsDeterministic}(Q)
 \\[6pt]
-\text{AI\_FALLBACK}
-& \text{if }
-\max_{C} \text{JEV}(Q, C) < \theta_{\text{route}}
-\lor \text{IsConceptual}(Q)
+\mathrm{AI\text{-}FALLBACK},
+& \text{if } \max_{C}\operatorname{JEV}(Q,C) < \theta_{\mathrm{route}}
+\lor \operatorname{IsConceptual}(Q)
 \end{cases}
 $$
 
-where $\theta_{\text{route}} = 0.55$.
+where $\theta_{\mathrm{route}} = 0.55$.
 
 Conceptual triggers (`"why"`, `"explain why"`, `"trade-offs"`, `"design pattern"`, `"how should we refactor"`) automatically route to the citation-grounded LLM layer.
 
