@@ -49,6 +49,7 @@ from wia.cli.commands.diff_cmd import diff_cmd
 from wia.cli.commands.export_cmd import export_cmd
 from wia.cli.commands.serve_cmd import serve_cmd
 from wia.cli.commands.decide_cmd import decide_cmd
+from wia.cli.commands.commands_cmd import commands_cmd
 from wia.cli.formatting import format_error
 from wia.exceptions import WIAError
 from wia.utils.logger import setup_logger
@@ -79,6 +80,8 @@ Common Commands:
   impact        Analyze refactoring blast radius and caller impact
   diff          Inspect git diff and affected symbols
   summary       Generate structured facts & intelligence summary
+  commands/run  Display runnable build, dev, test, and run commands for project
+  report        Generate interactive standalone HTML intelligence report
   config        Configure AI providers, models, and credentials
   auth          Interactive setup wizard for AI provider API keys
   doctor        Run system diagnostics and verify environment health
@@ -138,10 +141,13 @@ main.add_command(diff_cmd)
 main.add_command(export_cmd)
 main.add_command(serve_cmd)
 main.add_command(decide_cmd)
+main.add_command(commands_cmd)
 
 # Register command aliases for compatibility
 main.add_command(ask_cmd, name="query")
 main.add_command(index_cmd, name="scan")
+main.add_command(commands_cmd, name="run")
+main.add_command(commands_cmd, name="dev")
 
 
 def cli_entrypoint():
