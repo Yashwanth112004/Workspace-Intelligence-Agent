@@ -145,15 +145,15 @@ $$
 ### Decision Boundary & Fallback Threshold
 
 $$
-\operatorname{Route}(Q) =
+\text{Route}(Q) =
 \begin{cases}
-\arg\max_{C}\operatorname{JEV}(Q,C),
-& \text{if } \max_{C}\operatorname{JEV}(Q,C) \geq \theta_{\mathrm{route}}
-\land \operatorname{IsDeterministic}(Q)
+\arg\max_{C} \text{JEV}(Q,C),
+& \text{if } \max_{C} \text{JEV}(Q,C) \geq \theta_{\text{route}}
+\land \text{IsDeterministic}(Q)
 \\[6pt]
-\mathrm{AI\text{-}FALLBACK},
-& \text{if } \max_{C}\operatorname{JEV}(Q,C) < \theta_{\mathrm{route}}
-\lor \operatorname{IsConceptual}(Q)
+\text{AI-FALLBACK},
+& \text{if } \max_{C} \text{JEV}(Q,C) < \theta_{\text{route}}
+\lor \text{IsConceptual}(Q)
 \end{cases}
 $$
 
