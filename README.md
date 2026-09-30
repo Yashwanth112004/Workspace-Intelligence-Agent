@@ -127,16 +127,42 @@ $$w_j = 0.35, \quad w_e = 0.35, \quad w_v = 0.30 \quad \left(\sum w_k = 1.0\righ
 
    $$\text{NormalizedEditSim}(Q, C) = 1.0 - \frac{\text{Levenshtein}(Q, C)}{\max(|Q|, |C|)}$$
 
-3. **Domain Vector Vocabulary Overlap ($\text{VectorScore}$)**:
-   Weights technical domain terms and command trigger keywords:
+3. ### Domain Vector Vocabulary Overlap ($\text{VectorScore}$)
 
-   $$\text{VectorScore}(Q, C) = \frac{\sum_{t \in T(Q) \cap T(C)} \text{IDF}_{\text{domain}}(t)}{\sum_{t \in T(C)} \text{IDF}_{\text{domain}}(t)}$$
+Weights technical domain terms and command trigger keywords:
 
-#### Decision Boundary & Fallback Threshold:
+$$
+\text{VectorScore}(Q, C) =
+\frac{
+\sum_{t \in T(Q) \cap T(C)}
+\text{IDF}_{\text{domain}}(t)
+}{
+\sum_{t \in T(C)}
+\text{IDF}_{\text{domain}}(t)
+}
+$$
 
-$$\text{Route}(Q) = \begin{cases} \arg\max_{C} \text{JEV}(Q, C) & \text{if } \max_{C} \text{JEV}(Q, C) \ge \theta_{\text{route}} \land \text{IsDeterministic}(Q) \\ \text{AI\_FALLBACK} & \text{if } \max_{C} \text{JEV}(Q, C) < \theta_{\text{route}} \lor \text{IsConceptual}(Q) \end{cases}$$
+### Decision Boundary & Fallback Threshold
 
-where $\theta_{\text{route}} = 0.55$. Conceptual triggers (`"why"`, `"explain why"`, `"trade-offs"`, `"design pattern"`, `"how should we refactor"`) automatically route to the citation-grounded LLM layer.
+$$
+\text{Route}(Q) =
+\begin{cases}
+\displaystyle
+\arg\max_{C} \text{JEV}(Q, C)
+& \text{if }
+\max_{C} \text{JEV}(Q, C) \geq \theta_{\text{route}}
+\land \text{IsDeterministic}(Q)
+\\[6pt]
+\text{AI\_FALLBACK}
+& \text{if }
+\max_{C} \text{JEV}(Q, C) < \theta_{\text{route}}
+\lor \text{IsConceptual}(Q)
+\end{cases}
+$$
+
+where $\theta_{\text{route}} = 0.55$.
+
+Conceptual triggers (`"why"`, `"explain why"`, `"trade-offs"`, `"design pattern"`, `"how should we refactor"`) automatically route to the citation-grounded LLM layer.
 
 ---
 
